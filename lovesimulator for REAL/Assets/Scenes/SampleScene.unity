@@ -1076,13 +1076,13 @@ MonoBehaviour:
   forwardAcceleration: 100
   maxGroundSpeed: 100
   maxAirSpeed: 100
-  groundYawTurnSpeed: 180
+  groundYawTurnSpeed: 160
   airYawTurnSpeed: 100
   groundCarveStrength: 10
   airCarveStrength: 3
   carveMinSpeed: 2
   jumpVelocity: 20
-  jumpCooldown: 0.15
+  jumpCooldown: 0.1
   jumpFromGroundNormalPercent: 0.85
   jumpDetachTime: 0.12
   extraRiseGravity: 24
@@ -1091,7 +1091,7 @@ MonoBehaviour:
   groundedMemory: 0.1
   groundStickForce: 55
   groundStickGraceTime: 0.12
-  maxStickAwaySpeed: 6
+  maxStickAwaySpeed: 3
   rideHeight: 0.9
   visualPositionSmooth: 18
   visualFacingSmooth: 12

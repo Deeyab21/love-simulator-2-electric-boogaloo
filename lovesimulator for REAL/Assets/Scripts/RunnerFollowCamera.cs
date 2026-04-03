@@ -4,9 +4,9 @@ public class RunnerFollowCamera : MonoBehaviour
 {
     [Header("Target")]
     public Transform target;
-    public HighSpeedRunnerController runner;
+    public HamsterBallController runner;
 
-    [Header("Follow Distance")]
+    [Header("Base Follow")]
     public float followDistance = 8f;
     public float followHeight = 3.5f;
     public float lookHeightOffset = 1.0f;
@@ -14,9 +14,8 @@ public class RunnerFollowCamera : MonoBehaviour
     [Header("Position Smoothing")]
     public float positionSmoothTime = 0.12f;
 
-    [Header("Rotation / Recenter")]
+    [Header("Heading")]
     public float yawSmoothSpeed = 6f;
-    public float idleRecenteringSpeed = 3f;
     public float minHeadingMagnitude = 0.1f;
 
     [Header("Look Ahead")]
@@ -25,6 +24,13 @@ public class RunnerFollowCamera : MonoBehaviour
 
     [Header("Pitch")]
     public float fixedPitch = 18f;
+
+    [Header("Speed Effects")]
+    public bool useSpeedEffects = true;
+    public float speedForMaxEffect = 35f;
+    public float extraDistanceAtMaxSpeed = 3.0f;
+    public float extraHeightAtMaxSpeed = 0.75f;
+    public float extraLookAheadAtMaxSpeed = 2.5f;
 
     [Header("Debug")]
     public bool drawDebug = true;
@@ -44,10 +50,11 @@ public class RunnerFollowCamera : MonoBehaviour
         }
 
         if (runner == null)
-            runner = target.GetComponentInParent<HighSpeedRunnerController>();
+            runner = target.GetComponentInParent<HamsterBallController>();
 
         Vector3 initialForward = target.forward;
         initialForward.y = 0f;
+
         if (initialForward.sqrMagnitude < 0.0001f)
             initialForward = Vector3.forward;
 
@@ -72,14 +79,17 @@ public class RunnerFollowCamera : MonoBehaviour
 
         if (runner != null)
         {
-            desiredHeading = runner.GetTravelDirection();
-            desiredHeading.y = 0f;
+            desiredHeading = runner.GetHorizontalVelocity();
+
+            if (desiredHeading.sqrMagnitude < (minHeadingMagnitude * minHeadingMagnitude))
+                desiredHeading = target.forward;
         }
         else
         {
             desiredHeading = target.forward;
-            desiredHeading.y = 0f;
         }
+
+        desiredHeading.y = 0f;
 
         if (desiredHeading.sqrMagnitude < (minHeadingMagnitude * minHeadingMagnitude))
         {
@@ -90,16 +100,10 @@ public class RunnerFollowCamera : MonoBehaviour
             desiredHeading.Normalize();
         }
 
-        float headingSmooth = yawSmoothSpeed;
-
-        // When almost idle / low direction confidence, recenter more gently.
-        if (runner == null || desiredHeading.sqrMagnitude < 0.01f)
-            headingSmooth = idleRecenteringSpeed;
-
         smoothedHeading = Vector3.Slerp(
             smoothedHeading,
             desiredHeading,
-            headingSmooth * Time.deltaTime
+            yawSmoothSpeed * Time.deltaTime
         ).normalized;
 
         currentYaw = Mathf.Atan2(smoothedHeading.x, smoothedHeading.z) * Mathf.Rad2Deg;
@@ -107,9 +111,22 @@ public class RunnerFollowCamera : MonoBehaviour
 
     private void UpdateCameraPositionAndRotation()
     {
+        float speed01 = GetSpeedPercent();
+
+        float currentFollowDistance = followDistance;
+        float currentFollowHeight = followHeight;
+        float currentLookAheadDistance = lookAheadDistance;
+
+        if (useSpeedEffects)
+        {
+            currentFollowDistance += extraDistanceAtMaxSpeed * speed01;
+            currentFollowHeight += extraHeightAtMaxSpeed * speed01;
+            currentLookAheadDistance += extraLookAheadAtMaxSpeed * speed01;
+        }
+
         Quaternion yawRotation = Quaternion.Euler(0f, currentYaw, 0f);
 
-        Vector3 lookAhead = smoothedHeading * lookAheadDistance;
+        Vector3 lookAhead = smoothedHeading * currentLookAheadDistance;
         smoothedLookAhead = Vector3.Lerp(
             smoothedLookAhead,
             lookAhead,
@@ -119,8 +136,8 @@ public class RunnerFollowCamera : MonoBehaviour
         Vector3 targetLookPoint = target.position + Vector3.up * lookHeightOffset + smoothedLookAhead;
 
         Vector3 desiredOffset =
-            (yawRotation * Vector3.back * followDistance) +
-            (Vector3.up * followHeight);
+            (yawRotation * Vector3.back * currentFollowDistance) +
+            (Vector3.up * currentFollowHeight);
 
         Vector3 desiredPosition = target.position + desiredOffset;
 
@@ -132,18 +149,38 @@ public class RunnerFollowCamera : MonoBehaviour
         );
 
         Quaternion lookRotation = Quaternion.LookRotation(targetLookPoint - transform.position, Vector3.up);
-
         Vector3 euler = lookRotation.eulerAngles;
+
         transform.rotation = Quaternion.Euler(fixedPitch, euler.y, 0f);
+    }
+
+    private float GetSpeedPercent()
+    {
+        if (!useSpeedEffects || runner == null || speedForMaxEffect <= 0.001f)
+            return 0f;
+
+        float speed = runner.GetHorizontalVelocity().magnitude;
+        return Mathf.Clamp01(speed / speedForMaxEffect);
     }
 
     private void SnapImmediately()
     {
+        float speed01 = GetSpeedPercent();
+
+        float currentFollowDistance = followDistance;
+        float currentFollowHeight = followHeight;
+
+        if (useSpeedEffects)
+        {
+            currentFollowDistance += extraDistanceAtMaxSpeed * speed01;
+            currentFollowHeight += extraHeightAtMaxSpeed * speed01;
+        }
+
         Quaternion yawRotation = Quaternion.Euler(0f, currentYaw, 0f);
 
         Vector3 desiredOffset =
-            (yawRotation * Vector3.back * followDistance) +
-            (Vector3.up * followHeight);
+            (yawRotation * Vector3.back * currentFollowDistance) +
+            (Vector3.up * currentFollowHeight);
 
         transform.position = target.position + desiredOffset;
 

@@ -4,6 +4,11 @@ using UnityEngine;
 [RequireComponent(typeof(SphereCollider))]
 public class HamsterBallController : MonoBehaviour
 {
+
+    [Header("Respawn")]
+    public Transform respawnPoint;
+    public float respawnYThreshold = -20f;
+
     [Header("References")]
     public Transform visualRoot;
 
@@ -101,6 +106,8 @@ public class HamsterBallController : MonoBehaviour
         groundedTimer -= Time.fixedDeltaTime;
         stickGraceTimer -= Time.fixedDeltaTime;
 
+        CheckRespawn();
+
         isGrounded = groundedTimer > 0f;
 
         UpdateFacing();
@@ -116,6 +123,36 @@ public class HamsterBallController : MonoBehaviour
         {
             isGrounded = false;
         }
+    }
+
+    private void CheckRespawn()
+    {
+        if (transform.position.y > respawnYThreshold)
+            return;
+
+        Vector3 targetPos = respawnPoint != null ? respawnPoint.position : Vector3.zero;
+        Quaternion targetRot = respawnPoint != null ? respawnPoint.rotation : Quaternion.identity;
+
+        rb.position = targetPos;
+        rb.rotation = targetRot;
+        rb.linearVelocity = Vector3.zero;
+        rb.angularVelocity = Vector3.zero;
+
+        facingYaw = targetRot.eulerAngles.y;
+
+        Vector3 forward = targetRot * Vector3.forward;
+        forward.y = 0f;
+        if (forward.sqrMagnitude < 0.001f)
+            forward = Vector3.forward;
+
+        forward.Normalize();
+        smoothedVisualForward = forward;
+        lastStableMoveDirection = forward;
+
+        isGrounded = false;
+        groundedTimer = 0f;
+        stickGraceTimer = 0f;
+        jumpDetachTimer = 0f;
     }
 
     private void LateUpdate()
