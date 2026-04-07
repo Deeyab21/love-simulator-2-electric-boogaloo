@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 
 [RequireComponent(typeof(Rigidbody))]
 [RequireComponent(typeof(SphereCollider))]
@@ -31,6 +31,13 @@ public class HamsterBallController : MonoBehaviour
     public float jumpCooldown = 0.15f;
     [Range(0f, 1f)] public float jumpFromGroundNormalPercent = 0.85f;
     public float jumpDetachTime = 0.12f;
+    public float jumpHoldTime = 0.18f;
+    public float earlyReleaseGravityMultiplier = 2.5f;
+
+    [Header("Temporary Speed Boost")]
+    public float boostAccelerationBonus = 0f;
+    public float boostMaxSpeedBonus = 0f;
+    public float boostTimer = 0f;
 
     [Header("Gravity")]
     public float extraRiseGravity = 10f;
@@ -71,6 +78,8 @@ public class HamsterBallController : MonoBehaviour
     private Vector3 smoothedVisualForward = Vector3.forward;
     private Vector3 visualVelocityRef;
     private Vector3 lastStableMoveDirection = Vector3.forward;
+    private bool jumpHeld;
+    private float jumpHoldCounter;
 
     private void Awake()
     {
@@ -97,6 +106,8 @@ public class HamsterBallController : MonoBehaviour
 
         if (Input.GetButtonDown("Jump"))
             jumpPressed = true;
+
+        jumpHeld = Input.GetButton("Jump");
     }
 
     private void FixedUpdate()
@@ -105,6 +116,7 @@ public class HamsterBallController : MonoBehaviour
         jumpDetachTimer -= Time.fixedDeltaTime;
         groundedTimer -= Time.fixedDeltaTime;
         stickGraceTimer -= Time.fixedDeltaTime;
+        jumpHoldCounter -= Time.fixedDeltaTime;
 
         CheckRespawn();
 
@@ -122,6 +134,15 @@ public class HamsterBallController : MonoBehaviour
         if (groundedTimer <= 0f)
         {
             isGrounded = false;
+        }
+
+        boostTimer -= Time.fixedDeltaTime;
+
+        if (boostTimer <= 0f)
+        {
+            boostTimer = 0f;
+            boostAccelerationBonus = 0f;
+            boostMaxSpeedBonus = 0f;
         }
     }
 
@@ -172,10 +193,16 @@ public class HamsterBallController : MonoBehaviour
         desiredForward.y = 0f;
         desiredForward.Normalize();
 
-        rb.AddForce(desiredForward * forwardAcceleration, ForceMode.Acceleration);
+        // ✅ APPLY BOOST TO ACCELERATION
+        float accelToApply = forwardAcceleration + boostAccelerationBonus;
+
+        rb.AddForce(desiredForward * accelToApply, ForceMode.Acceleration);
 
         Vector3 horizontalVelocity = GetHorizontalVelocity();
-        float maxSpeed = isGrounded ? maxGroundSpeed : maxAirSpeed;
+
+        // ✅ APPLY BOOST TO MAX SPEED
+        float baseMaxSpeed = isGrounded ? maxGroundSpeed : maxAirSpeed;
+        float maxSpeed = baseMaxSpeed + boostMaxSpeedBonus;
 
         if (horizontalVelocity.magnitude > maxSpeed)
         {
@@ -233,7 +260,26 @@ public class HamsterBallController : MonoBehaviour
         if (isGrounded)
             return;
 
-        float gravityToApply = rb.linearVelocity.y > 0f ? extraRiseGravity : extraFallGravity;
+        float gravityToApply;
+
+        if (rb.linearVelocity.y > 0f)
+        {
+            bool withinHoldWindow = jumpHoldCounter > 0f;
+
+            if (jumpHeld && withinHoldWindow)
+            {
+                gravityToApply = extraRiseGravity;
+            }
+            else
+            {
+                gravityToApply = extraRiseGravity * earlyReleaseGravityMultiplier;
+            }
+        }
+        else
+        {
+            gravityToApply = extraFallGravity;
+        }
+
         rb.AddForce(Vector3.down * gravityToApply, ForceMode.Acceleration);
     }
 
@@ -257,6 +303,7 @@ public class HamsterBallController : MonoBehaviour
         stickGraceTimer = 0f;
         jumpTimer = jumpCooldown;
         jumpDetachTimer = jumpDetachTime;
+        jumpHoldCounter = jumpHoldTime;
     }
 
     private void UpdateVisuals()
@@ -354,5 +401,59 @@ public class HamsterBallController : MonoBehaviour
         Vector3 v = rb.linearVelocity;
         v.y = 0f;
         return v;
+    }
+
+    public Vector3 GetGroundNormal()
+    {
+        return lastGroundNormal;
+    }
+
+    private void OnGUI()
+    {
+        float speed = GetHorizontalVelocity().magnitude;
+
+        GUIStyle style = new GUIStyle();
+        style.fontSize = 24;
+        style.normal.textColor = Color.white;
+
+        GUI.Label(new Rect(20, 20, 300, 40), $"Speed: {speed:F1}", style);
+    }
+
+    public void ApplySpeedBoost(float accelerationBonus, float maxSpeedBonus, float duration, float instantSpeedBonus = 0f)
+    {
+        boostAccelerationBonus = Mathf.Max(boostAccelerationBonus, accelerationBonus);
+        boostMaxSpeedBonus = Mathf.Max(boostMaxSpeedBonus, maxSpeedBonus);
+        boostTimer = Mathf.Max(boostTimer, duration);
+
+        if (instantSpeedBonus > 0f)
+        {
+            Vector3 horizontal = GetHorizontalVelocity();
+            Vector3 boostDir;
+
+            if (horizontal.sqrMagnitude > 0.001f)
+            {
+                boostDir = horizontal.normalized;
+            }
+            else
+            {
+                boostDir = Quaternion.Euler(0f, facingYaw, 0f) * Vector3.forward;
+                boostDir.y = 0f;
+                boostDir.Normalize();
+            }
+
+            float currentSpeed = horizontal.magnitude;
+            float boostedSpeed = currentSpeed + instantSpeedBonus;
+
+            rb.linearVelocity = new Vector3(
+                boostDir.x * boostedSpeed,
+                rb.linearVelocity.y,
+                boostDir.z * boostedSpeed
+            );
+        }
+    }
+
+    public bool HasActiveSpeedBoost()
+    {
+        return boostTimer > 0f;
     }
 }

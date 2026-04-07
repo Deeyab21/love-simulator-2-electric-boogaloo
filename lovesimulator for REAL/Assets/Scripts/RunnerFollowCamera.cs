@@ -25,6 +25,11 @@ public class RunnerFollowCamera : MonoBehaviour
     [Header("Pitch")]
     public float fixedPitch = 18f;
 
+    [Header("Slope Pitch")]
+    public bool useSlopePitch = true;
+    public float maxSlopePitchOffset = 12f;
+    public float slopePitchSmoothSpeed = 5f;
+
     [Header("Speed Effects")]
     public bool useSpeedEffects = true;
     public float speedForMaxEffect = 35f;
@@ -39,6 +44,7 @@ public class RunnerFollowCamera : MonoBehaviour
     private Vector3 smoothedHeading = Vector3.forward;
     private Vector3 smoothedLookAhead = Vector3.zero;
     private float currentYaw;
+    private float currentSlopePitchOffset;
 
     private void Start()
     {
@@ -151,7 +157,15 @@ public class RunnerFollowCamera : MonoBehaviour
         Quaternion lookRotation = Quaternion.LookRotation(targetLookPoint - transform.position, Vector3.up);
         Vector3 euler = lookRotation.eulerAngles;
 
-        transform.rotation = Quaternion.Euler(fixedPitch, euler.y, 0f);
+        float targetSlopePitch = GetSlopePitchOffset();
+
+        currentSlopePitchOffset = Mathf.Lerp(
+            currentSlopePitchOffset,
+            targetSlopePitch,
+            slopePitchSmoothSpeed * Time.deltaTime
+        );
+
+        transform.rotation = Quaternion.Euler(fixedPitch + currentSlopePitchOffset, euler.y, 0f);
     }
 
     private float GetSpeedPercent()
@@ -204,5 +218,28 @@ public class RunnerFollowCamera : MonoBehaviour
 
         Gizmos.color = Color.cyan;
         Gizmos.DrawSphere(target.position + Vector3.up * lookHeightOffset + smoothedLookAhead, 0.12f);
+    }
+
+    private float GetSlopePitchOffset()
+    {
+        if (!useSlopePitch || runner == null || !runner.IsGrounded())
+            return 0f;
+
+        Vector3 groundNormal = runner.GetGroundNormal().normalized;
+        Vector3 forward = smoothedHeading;
+        forward.y = 0f;
+
+        if (forward.sqrMagnitude < 0.0001f)
+            return 0f;
+
+        forward.Normalize();
+
+        // Positive when moving uphill, negative when moving downhill.
+        float slopeAmount = Vector3.Dot(forward, Vector3.ProjectOnPlane(Vector3.up, groundNormal).normalized);
+
+        // Convert into a pitch offset.
+        float targetOffset = -slopeAmount * maxSlopePitchOffset;
+
+        return targetOffset;
     }
 }
