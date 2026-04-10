@@ -6,6 +6,10 @@ public class RunnerFollowCamera : MonoBehaviour
     public Transform target;
     public HamsterBallController runner;
 
+    [Header("Camera")]
+    [Tooltip("Camera whose FOV will be adjusted. If null, uses Camera on this object or children.")]
+    public Camera targetCamera;
+
     [Header("Base Follow")]
     public float followDistance = 8f;
     public float followHeight = 3.5f;
@@ -31,11 +35,28 @@ public class RunnerFollowCamera : MonoBehaviour
     public float slopePitchSmoothSpeed = 5f;
 
     [Header("Speed Effects")]
+    [Tooltip("Small sustained camera changes based on current speed. You can turn this off if you want only FOV kick.")]
     public bool useSpeedEffects = true;
     public float speedForMaxEffect = 35f;
-    public float extraDistanceAtMaxSpeed = 3.0f;
-    public float extraHeightAtMaxSpeed = 0.75f;
-    public float extraLookAheadAtMaxSpeed = 2.5f;
+    public float extraDistanceAtMaxSpeed = 1.0f;
+    public float extraHeightAtMaxSpeed = 0.2f;
+    public float extraLookAheadAtMaxSpeed = 0.8f;
+
+    [Header("FOV")]
+    public float baseFov = 60f;
+
+    [Header("Default Event FOV Kick")]
+    [Tooltip("Default extra FOV added by a kick event.")]
+    public float defaultKickAmount = 10f;
+
+    [Tooltip("Default time the kick stays near full strength before releasing.")]
+    public float defaultKickHoldTime = 0.20f;
+
+    [Tooltip("Default speed when expanding into the kick.")]
+    public float defaultKickInSpeed = 14f;
+
+    [Tooltip("Default speed when settling back down after the hold.")]
+    public float defaultKickOutSpeed = 5f;
 
     [Header("Debug")]
     public bool drawDebug = true;
@@ -45,6 +66,12 @@ public class RunnerFollowCamera : MonoBehaviour
     private Vector3 smoothedLookAhead = Vector3.zero;
     private float currentYaw;
     private float currentSlopePitchOffset;
+
+    private float currentKickAmount;
+    private float targetKickAmount;
+    private float kickHoldTimer;
+    private float kickInSpeed;
+    private float kickOutSpeed;
 
     private void Start()
     {
@@ -58,6 +85,14 @@ public class RunnerFollowCamera : MonoBehaviour
         if (runner == null)
             runner = target.GetComponentInParent<HamsterBallController>();
 
+        if (targetCamera == null)
+        {
+            targetCamera = GetComponent<Camera>();
+
+            if (targetCamera == null)
+                targetCamera = GetComponentInChildren<Camera>();
+        }
+
         Vector3 initialForward = target.forward;
         initialForward.y = 0f;
 
@@ -66,6 +101,9 @@ public class RunnerFollowCamera : MonoBehaviour
 
         smoothedHeading = initialForward.normalized;
         currentYaw = Mathf.Atan2(smoothedHeading.x, smoothedHeading.z) * Mathf.Rad2Deg;
+
+        if (targetCamera != null)
+            targetCamera.fieldOfView = baseFov;
 
         SnapImmediately();
     }
@@ -77,6 +115,7 @@ public class RunnerFollowCamera : MonoBehaviour
 
         UpdateHeading();
         UpdateCameraPositionAndRotation();
+        UpdateFov();
     }
 
     private void UpdateHeading()
@@ -168,6 +207,50 @@ public class RunnerFollowCamera : MonoBehaviour
         transform.rotation = Quaternion.Euler(fixedPitch + currentSlopePitchOffset, euler.y, 0f);
     }
 
+    private void UpdateFov()
+    {
+        if (targetCamera == null)
+            return;
+
+        if (kickHoldTimer > 0f)
+        {
+            kickHoldTimer -= Time.deltaTime;
+            targetKickAmount = Mathf.Max(targetKickAmount, currentKickAmount);
+        }
+        else
+        {
+            targetKickAmount = 0f;
+        }
+
+        float lerpSpeed = currentKickAmount < targetKickAmount ? kickInSpeed : kickOutSpeed;
+
+        currentKickAmount = Mathf.Lerp(
+            currentKickAmount,
+            targetKickAmount,
+            lerpSpeed * Time.deltaTime
+        );
+
+        targetCamera.fieldOfView = baseFov + currentKickAmount;
+    }
+
+    public void TriggerFovKick(float extraFov, float holdTime, float inSpeed, float outSpeed)
+    {
+        targetKickAmount = Mathf.Max(targetKickAmount, extraFov);
+        kickHoldTimer = Mathf.Max(kickHoldTimer, holdTime);
+        kickInSpeed = Mathf.Max(0.01f, inSpeed);
+        kickOutSpeed = Mathf.Max(0.01f, outSpeed);
+    }
+
+    public void TriggerFovKick()
+    {
+        TriggerFovKick(
+            defaultKickAmount,
+            defaultKickHoldTime,
+            defaultKickInSpeed,
+            defaultKickOutSpeed
+        );
+    }
+
     private float GetSpeedPercent()
     {
         if (!useSpeedEffects || runner == null || speedForMaxEffect <= 0.001f)
@@ -234,12 +317,30 @@ public class RunnerFollowCamera : MonoBehaviour
 
         forward.Normalize();
 
-        // Positive when moving uphill, negative when moving downhill.
-        float slopeAmount = Vector3.Dot(forward, Vector3.ProjectOnPlane(Vector3.up, groundNormal).normalized);
+        Vector3 projectedUpOnGroundPlane = Vector3.ProjectOnPlane(Vector3.up, groundNormal);
 
-        // Convert into a pitch offset.
+        if (projectedUpOnGroundPlane.sqrMagnitude < 0.0001f)
+            return 0f;
+
+        float slopeAmount = Vector3.Dot(forward, projectedUpOnGroundPlane.normalized);
         float targetOffset = -slopeAmount * maxSlopePitchOffset;
 
         return targetOffset;
+    }
+
+    private void OnGUI()
+    {
+        if (!drawDebug)
+            return;
+
+        GUIStyle style = new GUIStyle(GUI.skin.label);
+        style.fontSize = 20;
+        style.normal.textColor = Color.white;
+
+        if (targetCamera != null)
+            GUI.Label(new Rect(20, 140, 500, 30), $"FOV: {targetCamera.fieldOfView:F1}", style);
+
+        GUI.Label(new Rect(20, 165, 500, 30), $"Kick: {currentKickAmount:F1}", style);
+        GUI.Label(new Rect(20, 190, 500, 30), $"Kick Hold: {kickHoldTimer:F2}", style);
     }
 }
