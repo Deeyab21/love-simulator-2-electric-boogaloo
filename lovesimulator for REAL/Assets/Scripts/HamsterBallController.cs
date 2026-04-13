@@ -590,7 +590,8 @@ public class HamsterBallController : MonoBehaviour
         if (hitStop > 0f)
             yield return new WaitForSeconds(hitStop);
 
-        isInChainHitStop = false;
+        // Let ChainDashTarget handle its own inspector-driven debris delay now.
+        hitTarget.TriggerZoneImpact();
 
         Vector3 launchDir = hitTarget.GetLaunchDirection();
         if (launchDir.sqrMagnitude < 0.001f)
@@ -603,11 +604,6 @@ public class HamsterBallController : MonoBehaviour
             flatLaunch = GetTargetingForward();
 
         flatLaunch.Normalize();
-
-        facingYaw = Mathf.Atan2(flatLaunch.x, flatLaunch.z) * Mathf.Rad2Deg;
-        dashDirection = flatLaunch;
-        smoothedVisualForward = flatLaunch;
-        lastStableMoveDirection = flatLaunch;
 
         float playerRadius = 0.5f;
         if (sphereCol != null)
@@ -625,6 +621,12 @@ public class HamsterBallController : MonoBehaviour
 
         rb.linearVelocity = launchVelocity;
         rb.angularVelocity = Vector3.zero;
+
+        // Apply facing only at the moment of actual launch.
+        facingYaw = Mathf.Atan2(flatLaunch.x, flatLaunch.z) * Mathf.Rad2Deg;
+        dashDirection = flatLaunch;
+
+        isInChainHitStop = false;
 
         jumpDetachTimer = Mathf.Max(jumpDetachTimer, hitTarget.GetDetachFromGroundTime());
         groundedTimer = 0f;
