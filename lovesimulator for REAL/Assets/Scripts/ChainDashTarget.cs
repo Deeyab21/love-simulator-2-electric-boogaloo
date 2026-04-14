@@ -30,7 +30,7 @@ public class ChainDashTarget : MonoBehaviour
     public float detachFromGroundTime = 0.10f;
 
     [Header("Timing")]
-    [Tooltip("Delay before debris is launched after impact is triggered. Set this to match hitStopDuration if you want debris to fire on the same beat as the player launch.")]
+    [Tooltip("Delay before debris is launched after impact is triggered.")]
     public float debrisLaunchDelay = 0f;
 
     [Header("Debris Launch")]
@@ -72,10 +72,26 @@ public class ChainDashTarget : MonoBehaviour
     [Tooltip("Layers used when searching for loose rigidbodies.")]
     public LayerMask fallbackImpactLayers = ~0;
 
-    [Header("VFX")]
+    [Header("Impact VFX")]
     public GameObject impactVfxPrefab;
     public Transform impactVfxSpawnPoint;
     public float impactVfxLifetime = 5f;
+
+    [Header("Lock-On Indicator")]
+    [Tooltip("Prefab to show while this target is being previewed / in range.")]
+    public GameObject lockOnIndicatorPrefab;
+
+    [Tooltip("Where the indicator should sit. If null, uses aimPoint, otherwise this transform.")]
+    public Transform lockOnIndicatorAnchor;
+
+    [Tooltip("World offset for the indicator.")]
+    public Vector3 lockOnIndicatorOffset = Vector3.zero;
+
+    [Tooltip("Extra rotation offset if your prefab is facing the wrong way.")]
+    public Vector3 lockOnIndicatorRotationOffset = Vector3.zero;
+
+    [Tooltip("If checked, the prefab's forward points toward the camera. If unchecked, its back points toward the camera.")]
+    public bool indicatorForwardFacesCamera = true;
 
     [Header("Availability")]
     [Tooltip("If true, the target disables briefly after being hit.")]
@@ -83,19 +99,6 @@ public class ChainDashTarget : MonoBehaviour
 
     [Tooltip("How long the target stays disabled after being hit.")]
     public float reactivateDelay = 0.35f;
-
-    [Header("Visual Swap")]
-    [Tooltip("Prefab shown when this target is not the currently locked one.")]
-    public GameObject defaultVisualPrefab;
-
-    [Tooltip("Prefab shown when this target is the currently locked one.")]
-    public GameObject lockedVisualPrefab;
-
-    [Tooltip("Optional parent for spawned visuals. If null, this transform is used.")]
-    public Transform visualParent;
-
-    [Tooltip("If true, the spawned visuals are aligned to the aim point instead of this object.")]
-    public bool spawnVisualsAtAimPoint = false;
 
     [Header("Debug")]
     public bool drawGizmos = true;
@@ -107,32 +110,38 @@ public class ChainDashTarget : MonoBehaviour
     private bool isPreviewed;
     private bool impactTriggeredThisDisableCycle;
 
-    private GameObject defaultVisualInstance;
-    private GameObject lockedVisualInstance;
     private Coroutine disableRoutine;
     private Coroutine delayedImpactRoutine;
+
+    private GameObject lockOnIndicatorInstance;
+    private Camera mainCam;
 
     private void Awake()
     {
         cachedCollider = GetComponent<Collider>();
         cachedCollider.isTrigger = true;
 
-        if (visualParent == null)
-            visualParent = transform;
+        mainCam = Camera.main;
 
-        CreateVisualsIfNeeded();
-        RefreshVisualState();
+        CreateLockOnIndicatorIfNeeded();
+        UpdateIndicatorVisibility();
     }
 
     private void OnEnable()
     {
-        RefreshVisualState();
+        UpdateIndicatorVisibility();
     }
 
     private void OnDisable()
     {
         isPreviewed = false;
-        RefreshVisualState();
+        UpdateIndicatorVisibility();
+    }
+
+    private void OnDestroy()
+    {
+        if (lockOnIndicatorInstance != null)
+            Destroy(lockOnIndicatorInstance);
     }
 
     private void OnValidate()
@@ -142,9 +151,11 @@ public class ChainDashTarget : MonoBehaviour
 
         if (cachedCollider != null)
             cachedCollider.isTrigger = true;
+    }
 
-        if (visualParent == null)
-            visualParent = transform;
+    private void LateUpdate()
+    {
+        UpdateLockOnIndicator();
     }
 
     public bool CanBeTargeted()
@@ -202,7 +213,7 @@ public class ChainDashTarget : MonoBehaviour
             return;
 
         isPreviewed = previewed;
-        RefreshVisualState();
+        UpdateIndicatorVisibility();
     }
 
     public void NotifyHit()
@@ -276,6 +287,7 @@ public class ChainDashTarget : MonoBehaviour
                 continue;
 
             Rigidbody[] bodies = impactable.PrepareForImpact();
+
             for (int j = 0; j < bodies.Length; j++)
             {
                 Rigidbody rb = bodies[j];
@@ -303,6 +315,8 @@ public class ChainDashTarget : MonoBehaviour
                     continue;
 
                 rb.isKinematic = false;
+                rb.detectCollisions = true;
+                rb.useGravity = true;
                 rb.WakeUp();
                 affectedBodies.Add(rb);
             }
@@ -358,7 +372,7 @@ public class ChainDashTarget : MonoBehaviour
     {
         isAvailable = false;
         isPreviewed = false;
-        RefreshVisualState();
+        UpdateIndicatorVisibility();
 
         if (cachedCollider != null)
             cachedCollider.enabled = false;
@@ -376,54 +390,59 @@ public class ChainDashTarget : MonoBehaviour
 
         impactTriggeredThisDisableCycle = false;
         isAvailable = true;
-        RefreshVisualState();
         disableRoutine = null;
     }
 
-    private void CreateVisualsIfNeeded()
+    private void CreateLockOnIndicatorIfNeeded()
     {
-        if (defaultVisualPrefab != null && defaultVisualInstance == null)
-        {
-            defaultVisualInstance = Instantiate(defaultVisualPrefab, GetVisualSpawnPosition(), GetVisualSpawnRotation(), visualParent);
-            defaultVisualInstance.name = defaultVisualPrefab.name + "_DefaultPreview";
-        }
+        if (lockOnIndicatorPrefab == null || lockOnIndicatorInstance != null)
+            return;
 
-        if (lockedVisualPrefab != null && lockedVisualInstance == null)
-        {
-            lockedVisualInstance = Instantiate(lockedVisualPrefab, GetVisualSpawnPosition(), GetVisualSpawnRotation(), visualParent);
-            lockedVisualInstance.name = lockedVisualPrefab.name + "_LockedPreview";
-        }
+        lockOnIndicatorInstance = Instantiate(lockOnIndicatorPrefab);
+        lockOnIndicatorInstance.name = lockOnIndicatorPrefab.name + "_LockOnIndicator";
+        lockOnIndicatorInstance.SetActive(false);
     }
 
-    private Vector3 GetVisualSpawnPosition()
+    private void UpdateIndicatorVisibility()
     {
-        if (spawnVisualsAtAimPoint && aimPoint != null)
-            return aimPoint.position;
+        if (lockOnIndicatorInstance == null)
+            CreateLockOnIndicatorIfNeeded();
 
-        return visualParent != null ? visualParent.position : transform.position;
+        if (lockOnIndicatorInstance == null)
+            return;
+
+        bool shouldShow = isPreviewed && isAvailable;
+        lockOnIndicatorInstance.SetActive(shouldShow);
     }
 
-    private Quaternion GetVisualSpawnRotation()
+    private void UpdateLockOnIndicator()
     {
-        if (spawnVisualsAtAimPoint && aimPoint != null)
-            return aimPoint.rotation;
+        if (lockOnIndicatorInstance == null || !lockOnIndicatorInstance.activeSelf)
+            return;
 
-        return visualParent != null ? visualParent.rotation : transform.rotation;
-    }
+        if (mainCam == null)
+            mainCam = Camera.main;
 
-    private void RefreshVisualState()
-    {
-        if (defaultVisualInstance == null && lockedVisualInstance == null)
-            CreateVisualsIfNeeded();
+        Transform anchor = lockOnIndicatorAnchor != null
+            ? lockOnIndicatorAnchor
+            : (aimPoint != null ? aimPoint : transform);
 
-        bool showLocked = isPreviewed && isAvailable;
-        bool showDefault = !showLocked;
+        lockOnIndicatorInstance.transform.position = anchor.position + lockOnIndicatorOffset;
 
-        if (defaultVisualInstance != null)
-            defaultVisualInstance.SetActive(showDefault);
+        if (mainCam == null)
+            return;
 
-        if (lockedVisualInstance != null)
-            lockedVisualInstance.SetActive(showLocked);
+        Vector3 toCamera = mainCam.transform.position - lockOnIndicatorInstance.transform.position;
+        if (toCamera.sqrMagnitude < 0.0001f)
+            return;
+
+        Vector3 facingDirection = indicatorForwardFacesCamera
+            ? toCamera.normalized
+            : -toCamera.normalized;
+
+        lockOnIndicatorInstance.transform.rotation =
+            Quaternion.LookRotation(facingDirection, mainCam.transform.up) *
+            Quaternion.Euler(lockOnIndicatorRotationOffset);
     }
 
     private void OnDrawGizmos()
