@@ -6,206 +6,92 @@ using UnityEngine;
 public class HamsterBallController : MonoBehaviour
 {
     [Header("Respawn")]
-    [Tooltip("Where the player respawns after falling.")]
     public Transform respawnPoint;
-
-    [Tooltip("If player falls below this Y value, they respawn.")]
     public float respawnYThreshold = -20f;
 
     [Header("References")]
-    [Tooltip("Visual model that follows the physics body.")]
     public Transform visualRoot;
-
-    [Tooltip("Love meter used for dash cost.")]
     public LoveMeter loveMeter;
-
-    [Tooltip("Camera controller that receives speed-event FOV kick events.")]
     public RunnerFollowCamera followCamera;
+    public PlayerGameplayInput gameplayInput;
 
     [Header("Movement")]
-    [Tooltip("How quickly the player accelerates forward.")]
     public float forwardAcceleration = 30f;
-
-    [Tooltip("Maximum speed while grounded.")]
     public float maxGroundSpeed = 35f;
-
-    [Tooltip("Maximum speed while airborne.")]
     public float maxAirSpeed = 28f;
 
     [Header("Speed Limiting")]
-    [Tooltip("If true, speed above the cap is removed gradually instead of instantly snapping down.")]
     public bool useSmoothOverSpeedDecay = true;
-
-    [Tooltip("How quickly extra speed above the current max is removed. Higher = snappier, lower = smoother.")]
     public float overSpeedDeceleration = 45f;
-
-    [Tooltip("If true, normal forward drive stops pushing while already above the current max speed. This prevents permanent speed creep.")]
     public bool suppressDriveWhileOverspeed = true;
 
     [Header("Turning")]
-    [Tooltip("How fast the player rotates left/right on the ground.")]
     public float groundYawTurnSpeed = 240f;
-
-    [Tooltip("How fast the player rotates left/right in the air.")]
     public float airYawTurnSpeed = 120f;
 
     [Header("Carving")]
-    [Tooltip("How strongly movement direction bends toward facing direction on ground.")]
     public float groundCarveStrength = 9f;
-
-    [Tooltip("How strongly movement direction bends toward facing direction in air.")]
     public float airCarveStrength = 2.5f;
-
-    [Tooltip("Minimum speed required before carving starts affecting movement.")]
     public float carveMinSpeed = 2f;
 
     [Header("Jump Spec")]
-    [Tooltip("Desired jump height in world units.")]
     public float jumpHeight = 1.8f;
-
-    [Tooltip("How long it takes to reach the top of the jump.")]
     public float timeToApex = 0.28f;
-
-    [Tooltip("How long it takes to fall from the apex back down.")]
     public float timeToDescend = 0.22f;
-
-    [Tooltip("Minimum time between jumps.")]
     public float jumpCooldown = 0.10f;
-
-    [Tooltip("How much the jump direction follows the ground slope (0 = straight up, 1 = full slope normal).")]
     [Range(0f, 1f)] public float jumpFromGroundNormalPercent = 0.55f;
-
-    [Tooltip("Time after jumping where ground stick is disabled.")]
     public float jumpDetachTime = 0.10f;
 
-    [Header("Dash")]
-    [Tooltip("Press Left Shift to dash.")]
-    public KeyCode dashKey = KeyCode.LeftShift;
-
-    [Tooltip("If true, dash only works when the love meter is completely full.")]
+    [Header("Free Dash")]
     public bool requireFullLoveToDash = true;
-
-    [Tooltip("If requireFullLoveToDash is false, this much love is required and spent.")]
     public float dashLoveCost = 100f;
-
-    [Tooltip("Horizontal launch speed applied when dash starts.")]
     public float dashStartSpeed = 70f;
-
-    [Tooltip("Extra acceleration applied while dash is active.")]
     public float dashAcceleration = 120f;
-
-    [Tooltip("Maximum horizontal speed allowed during dash.")]
     public float dashMaxSpeed = 90f;
-
-    [Tooltip("How long the dash lasts.")]
     public float dashDuration = 0.18f;
-
-    [Tooltip("Minimum time before another dash can happen.")]
     public float dashCooldown = 0.35f;
-
-    [Tooltip("If true, player steering is ignored during dash.")]
     public bool lockSteeringDuringDash = true;
-
-    [Tooltip("If true, carving is ignored during dash.")]
     public bool lockCarvingDuringDash = true;
 
-    [Tooltip("If true, dash uses the current move direction when possible. Otherwise it uses facing direction.")]
-    public bool dashUsesMoveDirection = true;
-
-    [Header("Chain Dash Targets")]
-    [Tooltip("Layer(s) that contain valid chain targets.")]
+    [Header("Target Attack")]
     public LayerMask chainTargetLayers = ~0;
-
-    [Tooltip("How far away a target can be acquired.")]
     public float chainTargetSearchRadius = 14f;
-
-    [Tooltip("How wide the targeting cone is in front of the player.")]
-    [Range(1f, 180f)] public float chainTargetMaxAngle = 65f;
-
-    [Tooltip("How quickly the player is pulled to the target aim point.")]
+    [Range(1f, 180f)] public float chainTargetMaxAngle = 50f;
     public float chainPullSpeed = 120f;
-
-    [Tooltip("How quickly the player rotates to face the pull direction during chain dash.")]
     public float chainPullFacingSpeed = 18f;
-
-    [Tooltip("If true, Shift will prefer a chain target over the normal dash when one is found.")]
-    public bool prioritizeChainTargets = true;
-
-    [Tooltip("Refill the love meter to full when a chain target is hit.")]
     public bool refillLoveOnChainHit = true;
-
-    [Tooltip("If true, chain dash ignores the normal love requirement.")]
     public bool chainDashIgnoresLoveRequirement = true;
-
-    [Tooltip("Extra FOV kick fired after the chain launch.")]
     public float chainLaunchCameraKickAmount = 11f;
-
-    [Tooltip("Extra distance added beyond the player's sphere radius when ejecting from a chain target.")]
     public float chainLaunchExitPadding = 0.35f;
-
-    [Tooltip("Short lockout after chain launch where no new chain target can be acquired.")]
     public float chainRetargetLockoutDuration = 0.18f;
 
     [Header("Shared Speed Camera Kick")]
-    [Tooltip("If true, dash and speed boosts both trigger the same FOV kick settings.")]
     public bool triggerSpeedCameraKick = true;
-
-    [Tooltip("Extra FOV added when a dash or speed boost starts.")]
     public float speedCameraKickAmount = 9f;
-
-    [Tooltip("How long the FOV kick stays near full before settling.")]
     public float speedCameraKickHoldTime = 0.22f;
-
-    [Tooltip("How quickly the FOV kick expands.")]
     public float speedCameraKickInSpeed = 14f;
-
-    [Tooltip("How quickly the FOV kick settles back down.")]
     public float speedCameraKickOutSpeed = 5f;
 
     [Header("Temporary Speed Boost")]
-    [Tooltip("Extra acceleration applied during boost.")]
     public float boostAccelerationBonus = 0f;
-
-    [Tooltip("Extra max speed allowed during boost.")]
     public float boostMaxSpeedBonus = 0f;
-
-    [Tooltip("Remaining boost time.")]
     public float boostTimer = 0f;
 
     [Header("Grounding")]
-    [Tooltip("Maximum slope angle that still counts as ground.")]
     public float maxGroundAngle = 60f;
-
-    [Tooltip("Time after leaving ground that still counts as grounded (coyote time).")]
     public float groundedMemory = 0.10f;
 
     [Header("Ground Stick")]
-    [Tooltip("Force pushing the player toward the ground.")]
     public float groundStickForce = 35f;
-
-    [Tooltip("Time after leaving ground where stick force still applies.")]
     public float groundStickGraceTime = 0.12f;
-
-    [Tooltip("Max upward speed allowed before ground stick cancels it.")]
     public float maxStickAwaySpeed = 6f;
 
     [Header("Visuals")]
-    [Tooltip("Height offset of visual model above physics body.")]
     public float rideHeight = 0.9f;
-
-    [Tooltip("How smoothly the visual follows position.")]
     public float visualPositionSmooth = 18f;
-
-    [Tooltip("How quickly the visual rotates to match movement direction.")]
     public float visualFacingSmooth = 12f;
-
-    [Tooltip("How much the character leans when turning.")]
     public float visualTurnLean = 15f;
-
-    [Tooltip("How quickly the lean updates.")]
     public float visualLeanSmooth = 10f;
-
-    [Tooltip("Minimum speed required before visual starts facing movement direction.")]
     public float minVisualSpeedForFacing = 0.75f;
 
     private Rigidbody rb;
@@ -214,6 +100,7 @@ public class HamsterBallController : MonoBehaviour
     private float steerInput;
     private bool jumpPressed;
     private bool dashPressed;
+    private bool attackPressed;
 
     private float facingYaw;
     private float jumpTimer;
@@ -261,6 +148,9 @@ public class HamsterBallController : MonoBehaviour
         if (followCamera == null)
             followCamera = FindAnyObjectByType<RunnerFollowCamera>();
 
+        if (gameplayInput == null)
+            gameplayInput = GetComponent<PlayerGameplayInput>();
+
         facingYaw = transform.eulerAngles.y;
 
         Vector3 startForward = transform.forward;
@@ -276,33 +166,25 @@ public class HamsterBallController : MonoBehaviour
 
     private void Update()
     {
-        steerInput = Input.GetAxisRaw("Horizontal");
+        if (gameplayInput != null)
+        {
+            steerInput = gameplayInput.MoveInput.x;
 
-        if (Input.GetButtonDown("Jump"))
-            jumpPressed = true;
+            if (gameplayInput.JumpPressed)
+                jumpPressed = true;
 
-        if (Input.GetKeyDown(dashKey))
-            dashPressed = true;
+            if (gameplayInput.DashPressed)
+                dashPressed = true;
+
+            if (gameplayInput.AttackPressed)
+                attackPressed = true;
+        }
+        else
+        {
+            steerInput = 0f;
+        }
 
         UpdateChainTargetPreview();
-    }
-
-    private void UpdateChainTargetPreview()
-    {
-        ChainDashTarget newPreview = null;
-
-        if (!isChainDashing && !isInChainHitStop && chainRetargetLockoutTimer <= 0f)
-            newPreview = FindBestChainTarget();
-
-        if (lastPreviewedChainTarget != null && lastPreviewedChainTarget != newPreview)
-            lastPreviewedChainTarget.SetPreviewed(false);
-
-        lockedChainTarget = newPreview;
-
-        if (lockedChainTarget != null)
-            lockedChainTarget.SetPreviewed(true);
-
-        lastPreviewedChainTarget = lockedChainTarget;
     }
 
     private void FixedUpdate()
@@ -325,13 +207,15 @@ public class HamsterBallController : MonoBehaviour
             rb.linearVelocity = Vector3.zero;
             jumpPressed = false;
             dashPressed = false;
+            attackPressed = false;
             return;
         }
 
         isGrounded = groundedTimer > 0f;
 
         UpdateFacing();
-        HandleDash();
+        HandleFreeDash();
+        HandleTargetAttack();
 
         ApplyDrive();
         ApplyCarving();
@@ -341,6 +225,7 @@ public class HamsterBallController : MonoBehaviour
 
         jumpPressed = false;
         dashPressed = false;
+        attackPressed = false;
 
         if (groundedTimer <= 0f)
             isGrounded = false;
@@ -359,6 +244,11 @@ public class HamsterBallController : MonoBehaviour
 
         if (dashCooldownTimer <= 0f)
             dashCooldownTimer = 0f;
+    }
+
+    private void LateUpdate()
+    {
+        UpdateVisuals();
     }
 
     private void CheckRespawn()
@@ -408,20 +298,6 @@ public class HamsterBallController : MonoBehaviour
         dashCooldownTimer = 0f;
     }
 
-    private void LateUpdate()
-    {
-        UpdateVisuals();
-    }
-
-    private void ClearChainPreview()
-    {
-        if (lastPreviewedChainTarget != null)
-        {
-            lastPreviewedChainTarget.SetPreviewed(false);
-            lastPreviewedChainTarget = null;
-        }
-    }
-
     private void UpdateFacing()
     {
         if ((IsDashing && lockSteeringDuringDash) || isChainDashing || isInChainHitStop)
@@ -431,23 +307,18 @@ public class HamsterBallController : MonoBehaviour
         facingYaw += steerInput * turnSpeed * Time.deltaTime;
     }
 
-    private void HandleDash()
+    private void HandleFreeDash()
     {
         if (!dashPressed || IsDashing || dashCooldownTimer > 0f)
             return;
-
-        if (prioritizeChainTargets && lockedChainTarget != null)
-        {
-            StartChainDash(lockedChainTarget);
-            return;
-        }
 
         if (!CanDash())
             return;
 
         SpendLoveForDash();
 
-        dashDirection = GetDashDirection();
+        // Dash always straight ahead based on current facing.
+        dashDirection = GetAimDirection();
 
         Vector3 horizontal = GetHorizontalVelocity();
         float currentSpeedAlongDash = Vector3.Dot(horizontal, dashDirection);
@@ -462,10 +333,35 @@ public class HamsterBallController : MonoBehaviour
         TriggerSharedSpeedCameraKick();
     }
 
+    private void HandleTargetAttack()
+    {
+        if (!attackPressed || IsDashing)
+            return;
+
+        ChainDashTarget target = FindBestChainTarget();
+        if (target == null)
+            return;
+
+        StartChainDash(target);
+    }
+
+    private Vector3 GetAimDirection()
+    {
+        Vector3 forward = Quaternion.Euler(0f, facingYaw, 0f) * Vector3.forward;
+        forward.y = 0f;
+
+        if (forward.sqrMagnitude < 0.001f)
+            forward = transform.forward;
+
+        forward.y = 0f;
+        forward.Normalize();
+        return forward;
+    }
+
     private ChainDashTarget FindBestChainTarget()
     {
         Vector3 origin = transform.position;
-        Vector3 forward = GetTargetingForward();
+        Vector3 aimForward = GetAimDirection();
 
         Collider[] hits = Physics.OverlapSphere(
             origin,
@@ -490,14 +386,14 @@ public class HamsterBallController : MonoBehaviour
                 continue;
 
             Vector3 dir = toTarget / distance;
-            float angle = Vector3.Angle(forward, dir);
+            float angle = Vector3.Angle(aimForward, dir);
 
             if (angle > chainTargetMaxAngle)
                 continue;
 
             float angleScore = 1f - (angle / chainTargetMaxAngle);
             float distanceScore = 1f - Mathf.Clamp01(distance / chainTargetSearchRadius);
-            float totalScore = angleScore * 2f + distanceScore;
+            float totalScore = angleScore * 3f + distanceScore;
 
             if (totalScore > bestScore)
             {
@@ -509,15 +405,24 @@ public class HamsterBallController : MonoBehaviour
         return bestTarget;
     }
 
-    private Vector3 GetTargetingForward()
+    private void UpdateChainTargetPreview()
     {
-        Vector3 horizontal = GetHorizontalVelocity();
-        if (horizontal.sqrMagnitude > 0.01f)
-            return horizontal.normalized;
+        if (lastPreviewedChainTarget != null)
+        {
+            lastPreviewedChainTarget.SetPreviewed(false);
+            lastPreviewedChainTarget = null;
+        }
 
-        Vector3 facing = Quaternion.Euler(0f, facingYaw, 0f) * Vector3.forward;
-        facing.y = 0f;
-        return facing.normalized;
+        lockedChainTarget = null;
+    }
+
+    private void ClearChainPreview()
+    {
+        if (lastPreviewedChainTarget != null)
+        {
+            lastPreviewedChainTarget.SetPreviewed(false);
+            lastPreviewedChainTarget = null;
+        }
     }
 
     private void StartChainDash(ChainDashTarget target)
@@ -544,7 +449,7 @@ public class HamsterBallController : MonoBehaviour
         Vector3 pullDir = toAim.normalized;
 
         if (pullDir.sqrMagnitude < 0.001f)
-            pullDir = GetTargetingForward();
+            pullDir = GetAimDirection();
 
         rb.linearVelocity = pullDir * chainPullSpeed;
         dashDirection = new Vector3(pullDir.x, 0f, pullDir.z).normalized;
@@ -590,7 +495,6 @@ public class HamsterBallController : MonoBehaviour
         if (hitStop > 0f)
             yield return new WaitForSeconds(hitStop);
 
-        // Let ChainDashTarget handle its own inspector-driven debris delay now.
         hitTarget.TriggerZoneImpact();
 
         Vector3 launchDir = hitTarget.GetLaunchDirection();
@@ -601,7 +505,7 @@ public class HamsterBallController : MonoBehaviour
 
         Vector3 flatLaunch = new Vector3(launchDir.x, 0f, launchDir.z);
         if (flatLaunch.sqrMagnitude < 0.001f)
-            flatLaunch = GetTargetingForward();
+            flatLaunch = GetAimDirection();
 
         flatLaunch.Normalize();
 
@@ -622,7 +526,6 @@ public class HamsterBallController : MonoBehaviour
         rb.linearVelocity = launchVelocity;
         rb.angularVelocity = Vector3.zero;
 
-        // Apply facing only at the moment of actual launch.
         facingYaw = Mathf.Atan2(flatLaunch.x, flatLaunch.z) * Mathf.Rad2Deg;
         dashDirection = flatLaunch;
 
@@ -667,29 +570,6 @@ public class HamsterBallController : MonoBehaviour
             loveMeter.SetLove(0f);
         else
             loveMeter.TrySpendLove(dashLoveCost);
-    }
-
-    private Vector3 GetDashDirection()
-    {
-        if (dashUsesMoveDirection)
-        {
-            Vector3 moveDir = GetHorizontalVelocity();
-            if (moveDir.sqrMagnitude > 0.001f)
-            {
-                moveDir.Normalize();
-                return moveDir;
-            }
-        }
-
-        Vector3 facingDir = Quaternion.Euler(0f, facingYaw, 0f) * Vector3.forward;
-        facingDir.y = 0f;
-
-        if (facingDir.sqrMagnitude < 0.001f)
-            facingDir = transform.forward;
-
-        facingDir.y = 0f;
-        facingDir.Normalize();
-        return facingDir;
     }
 
     private void ApplyDrive()
@@ -992,28 +872,6 @@ public class HamsterBallController : MonoBehaviour
     public bool HasLockedChainTarget()
     {
         return lockedChainTarget != null && !isChainDashing && !isInChainHitStop && chainRetargetLockoutTimer <= 0f;
-    }
-
-    private void OnGUI()
-    {
-        float speed = GetHorizontalVelocity().magnitude;
-
-        GUIStyle style = new GUIStyle();
-        style.fontSize = 24;
-        style.normal.textColor = Color.white;
-
-        GUI.Label(new Rect(20, 20, 400, 40), $"Speed: {speed:F1}", style);
-
-        if (loveMeter != null)
-        {
-            string dashState = CanDash() ? "READY" : "NOT READY";
-            GUI.Label(new Rect(20, 60, 400, 40), $"Dash: {dashState}", style);
-        }
-
-        GUI.Label(new Rect(20, 100, 600, 40), $"Locked Target: {(lockedChainTarget != null ? lockedChainTarget.name : "None")}", style);
-        GUI.Label(new Rect(20, 140, 500, 40), $"Chain Dashing: {isChainDashing}", style);
-        GUI.Label(new Rect(20, 180, 500, 40), $"Hit Stop: {isInChainHitStop}", style);
-        GUI.Label(new Rect(20, 220, 500, 40), $"Retarget Lockout: {chainRetargetLockoutTimer:F2}", style);
     }
 
     public void ApplySpeedBoost(float accelerationBonus, float maxSpeedBonus, float duration, float instantSpeedBonus = 0f)

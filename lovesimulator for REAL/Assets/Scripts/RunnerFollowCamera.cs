@@ -35,7 +35,7 @@ public class RunnerFollowCamera : MonoBehaviour
     public float slopePitchSmoothSpeed = 5f;
 
     [Header("Speed Effects")]
-    [Tooltip("Small sustained camera changes based on current speed. You can turn this off if you want only FOV kick.")]
+    [Tooltip("Small sustained camera changes based on current speed.")]
     public bool useSpeedEffects = true;
     public float speedForMaxEffect = 35f;
     public float extraDistanceAtMaxSpeed = 1.0f;
@@ -46,16 +46,9 @@ public class RunnerFollowCamera : MonoBehaviour
     public float baseFov = 60f;
 
     [Header("Default Event FOV Kick")]
-    [Tooltip("Default extra FOV added by a kick event.")]
     public float defaultKickAmount = 10f;
-
-    [Tooltip("Default time the kick stays near full strength before releasing.")]
     public float defaultKickHoldTime = 0.20f;
-
-    [Tooltip("Default speed when expanding into the kick.")]
     public float defaultKickInSpeed = 14f;
-
-    [Tooltip("Default speed when settling back down after the hold.")]
     public float defaultKickOutSpeed = 5f;
 
     [Header("Debug")]
@@ -120,7 +113,7 @@ public class RunnerFollowCamera : MonoBehaviour
 
     private void UpdateHeading()
     {
-        Vector3 desiredHeading = smoothedHeading;
+        Vector3 desiredHeading;
 
         if (runner != null)
         {
@@ -288,21 +281,6 @@ public class RunnerFollowCamera : MonoBehaviour
         transform.rotation = Quaternion.Euler(fixedPitch, euler.y, 0f);
     }
 
-    private void OnDrawGizmos()
-    {
-        if (!drawDebug || target == null)
-            return;
-
-        Gizmos.color = Color.white;
-        Gizmos.DrawLine(target.position, target.position + Vector3.up * lookHeightOffset);
-
-        Gizmos.color = Color.yellow;
-        Gizmos.DrawLine(target.position, target.position + smoothedHeading * 3f);
-
-        Gizmos.color = Color.cyan;
-        Gizmos.DrawSphere(target.position + Vector3.up * lookHeightOffset + smoothedLookAhead, 0.12f);
-    }
-
     private float GetSlopePitchOffset()
     {
         if (!useSlopePitch || runner == null || !runner.IsGrounded())
@@ -323,9 +301,22 @@ public class RunnerFollowCamera : MonoBehaviour
             return 0f;
 
         float slopeAmount = Vector3.Dot(forward, projectedUpOnGroundPlane.normalized);
-        float targetOffset = -slopeAmount * maxSlopePitchOffset;
+        return -slopeAmount * maxSlopePitchOffset;
+    }
 
-        return targetOffset;
+    private void OnDrawGizmos()
+    {
+        if (!drawDebug || target == null)
+            return;
+
+        Gizmos.color = Color.white;
+        Gizmos.DrawLine(target.position, target.position + Vector3.up * lookHeightOffset);
+
+        Gizmos.color = Color.yellow;
+        Gizmos.DrawLine(target.position, target.position + smoothedHeading * 3f);
+
+        Gizmos.color = Color.cyan;
+        Gizmos.DrawSphere(target.position + Vector3.up * lookHeightOffset + smoothedLookAhead, 0.12f);
     }
 
     private void OnGUI()
