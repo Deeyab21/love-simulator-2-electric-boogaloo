@@ -457,7 +457,6 @@ public class ChainDashTarget : MonoBehaviour
 
         Gizmos.color = Color.red;
         Gizmos.DrawWireSphere(aim, Mathf.Max(0.01f, arriveDistance));
-
         Gizmos.color = Color.yellow;
         Gizmos.DrawLine(aim, aim + playerLaunchDir * 2.5f);
         Gizmos.DrawSphere(aim + playerLaunchDir * 2.5f, 0.15f);
