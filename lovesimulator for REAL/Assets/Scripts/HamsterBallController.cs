@@ -1,4 +1,5 @@
 ﻿using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 
 [RequireComponent(typeof(Rigidbody))]
@@ -6,93 +7,212 @@ using UnityEngine;
 public class HamsterBallController : MonoBehaviour
 {
     [Header("Respawn")]
+    [Tooltip("Where the player is placed after falling out of bounds.")]
     public Transform respawnPoint;
+
+    [Tooltip("If the player falls below this Y value, they respawn.")]
     public float respawnYThreshold = -20f;
 
     [Header("References")]
+    [Tooltip("Visual child object that tilts and faces movement. Leave null if not used.")]
     public Transform visualRoot;
+
+    [Tooltip("Love meter used for dash cost and refill.")]
     public LoveMeter loveMeter;
+
+    [Tooltip("Camera script used for FOV kick effects.")]
     public RunnerFollowCamera followCamera;
+
+    [Tooltip("Input reader for move / jump / dash / attack.")]
     public PlayerGameplayInput gameplayInput;
 
-    [Header("Movement")]
+    [Header("Forward Movement")]
+    [Tooltip("How strongly the player is pushed forward every physics step.")]
     public float forwardAcceleration = 30f;
+
+    [Tooltip("Maximum normal grounded speed.")]
     public float maxGroundSpeed = 35f;
+
+    [Tooltip("Maximum normal airborne speed.")]
     public float maxAirSpeed = 28f;
 
     [Header("Speed Limiting")]
-    public bool useSmoothOverSpeedDecay = true;
-    public float overSpeedDeceleration = 45f;
+    [Tooltip("If true, overspeed is reduced gradually. If false, overspeed is clamped more directly.")]
+    public bool useSmoothOverSpeedDecay = false;
+
+    [Tooltip("How fast overspeed is reduced when smooth decay is enabled.")]
+    public float overSpeedDeceleration = 55f;
+
+    [Tooltip("If true, normal forward drive is reduced once the player is already overspeed.")]
     public bool suppressDriveWhileOverspeed = true;
 
-    [Header("Turning")]
-    public float groundYawTurnSpeed = 240f;
-    public float airYawTurnSpeed = 120f;
+    [Header("Runner Steering")]
+    [Tooltip("Maximum steering angle in degrees. This is the main steering amount. Smaller = tighter / straighter. Bigger = wider curves.")]
+    public float maxSteerAngleDegrees = 12f;
 
-    [Header("Carving")]
-    public float groundCarveStrength = 9f;
-    public float airCarveStrength = 2.5f;
-    public float carveMinSpeed = 2f;
+    [Tooltip("If true, steering becomes tighter at high speed and looser at lower speed.")]
+    public bool useSpeedScaledSteering = false;
 
-    [Header("Jump Spec")]
+    [Tooltip("Steering angle used at lower speed when speed scaling is enabled.")]
+    public float lowSpeedSteerAngleDegrees = 16f;
+
+    [Tooltip("Steering angle used at high speed when speed scaling is enabled.")]
+    public float highSpeedSteerAngleDegrees = 8f;
+
+    [Tooltip("Speed used as the reference for reaching the high-speed steering angle.")]
+    public float speedForMinSteer = 35f;
+
+    [Tooltip("How much current horizontal speed is preserved while steering. 1 = preserve almost all speed through curves.")]
+    public float turnSpeedPreservation = 0.96f;
+
+    [Header("Directional Grip")]
+    [Tooltip("How strongly grounded sideways drift is removed. Higher = tighter and more planted. Lower = more slide.")]
+    public float groundLateralGrip = 40f;
+
+    [Tooltip("How strongly airborne sideways drift is removed. Higher = more controllable in air. Lower = floatier in air.")]
+    public float airLateralGrip = 14f;
+
+    [Header("Facing")]
+    [Tooltip("Minimum horizontal speed needed before the player's facing updates from movement direction.")]
+    public float minSpeedToUpdateFacing = 0.25f;
+
+    [Header("Jump")]
+    [Tooltip("Desired jump height.")]
     public float jumpHeight = 1.8f;
+
+    [Tooltip("Time from jump start to apex.")]
     public float timeToApex = 0.28f;
+
+    [Tooltip("Time from apex back down.")]
     public float timeToDescend = 0.22f;
+
+    [Tooltip("Minimum time between jumps.")]
     public float jumpCooldown = 0.10f;
+
+    [Tooltip("How much the jump follows the ground normal instead of straight up. 0 = straight up, 1 = fully ground-normal based.")]
     [Range(0f, 1f)] public float jumpFromGroundNormalPercent = 0.55f;
+
+    [Tooltip("How long ground stick is disabled after jumping.")]
     public float jumpDetachTime = 0.10f;
 
     [Header("Free Dash")]
+    [Tooltip("If true, the love meter must be full to dash.")]
     public bool requireFullLoveToDash = true;
-    public float dashLoveCost = 100f;
-    public float dashStartSpeed = 70f;
-    public float dashAcceleration = 120f;
-    public float dashMaxSpeed = 90f;
-    public float dashDuration = 0.18f;
-    public float dashCooldown = 0.35f;
-    public bool lockSteeringDuringDash = true;
-    public bool lockCarvingDuringDash = true;
 
-    [Header("Target Attack")]
+    [Tooltip("Love cost when full-love requirement is turned off.")]
+    public float dashLoveCost = 100f;
+
+    [Tooltip("Minimum speed applied when a dash begins.")]
+    public float dashStartSpeed = 70f;
+
+    [Tooltip("Extra acceleration during dash.")]
+    public float dashAcceleration = 120f;
+
+    [Tooltip("Maximum speed allowed during dash.")]
+    public float dashMaxSpeed = 90f;
+
+    [Tooltip("How long the dash lasts.")]
+    public float dashDuration = 0.18f;
+
+    [Tooltip("Minimum time before another dash can begin.")]
+    public float dashCooldown = 0.35f;
+
+    [Tooltip("If true, steering input is ignored during free dash. If false, you can curve the dash with runner steering.")]
+    public bool lockSteeringDuringDash = true;
+
+    [Header("Target Attack / Chain Dash")]
+    [Tooltip("Layers searched when looking for chain dash targets.")]
     public LayerMask chainTargetLayers = ~0;
+
+    [Tooltip("How far away a target can be and still be considered for attack.")]
     public float chainTargetSearchRadius = 14f;
+
+    [Tooltip("Maximum front-facing angle allowed when choosing a chain target.")]
     [Range(1f, 180f)] public float chainTargetMaxAngle = 50f;
+
+    [Tooltip("Speed used while being pulled toward a chain target.")]
     public float chainPullSpeed = 120f;
+
+    [Tooltip("How quickly facing updates while being pulled toward a chain target.")]
     public float chainPullFacingSpeed = 18f;
+
+    [Tooltip("If true, hitting a chain target refills the love meter.")]
     public bool refillLoveOnChainHit = true;
+
+    [Tooltip("If true, chain attack ignores the normal love requirement.")]
     public bool chainDashIgnoresLoveRequirement = true;
+
+    [Tooltip("Extra camera FOV kick when launched out of a chain target.")]
     public float chainLaunchCameraKickAmount = 11f;
+
+    [Tooltip("Extra distance to push the player out of the target before the launch begins.")]
     public float chainLaunchExitPadding = 0.35f;
+
+    [Tooltip("How long attack target re-locking is prevented after a chain launch.")]
     public float chainRetargetLockoutDuration = 0.18f;
 
     [Header("Shared Speed Camera Kick")]
+    [Tooltip("If true, dashes and boosts trigger the shared speed camera kick.")]
     public bool triggerSpeedCameraKick = true;
+
+    [Tooltip("Extra FOV added by the shared speed kick.")]
     public float speedCameraKickAmount = 9f;
+
+    [Tooltip("How long the shared speed kick is held before relaxing.")]
     public float speedCameraKickHoldTime = 0.22f;
+
+    [Tooltip("How quickly the shared speed kick ramps in.")]
     public float speedCameraKickInSpeed = 14f;
+
+    [Tooltip("How quickly the shared speed kick ramps out.")]
     public float speedCameraKickOutSpeed = 5f;
 
     [Header("Temporary Speed Boost")]
+    [Tooltip("Temporary acceleration bonus applied by boost zones or other effects.")]
     public float boostAccelerationBonus = 0f;
+
+    [Tooltip("Temporary max-speed bonus applied by boost zones or other effects.")]
     public float boostMaxSpeedBonus = 0f;
+
+    [Tooltip("How long the current temporary boost remains active.")]
     public float boostTimer = 0f;
 
     [Header("Grounding")]
+    [Tooltip("Maximum walkable ground angle.")]
     public float maxGroundAngle = 60f;
+
+    [Tooltip("How long grounded state lingers after losing contact.")]
     public float groundedMemory = 0.10f;
 
     [Header("Ground Stick")]
+    [Tooltip("Downward force used to keep the player attached to the ground.")]
     public float groundStickForce = 35f;
+
+    [Tooltip("Extra grace period where ground stick still applies after losing contact.")]
     public float groundStickGraceTime = 0.12f;
+
+    [Tooltip("Maximum upward-away speed that ground stick is allowed to cancel.")]
     public float maxStickAwaySpeed = 6f;
 
     [Header("Visuals")]
+    [Tooltip("Vertical offset for the visual model.")]
     public float rideHeight = 0.9f;
+
+    [Tooltip("How quickly the visual model follows the rigidbody position.")]
     public float visualPositionSmooth = 18f;
+
+    [Tooltip("How quickly the visual model rotates toward travel direction.")]
     public float visualFacingSmooth = 12f;
-    public float visualTurnLean = 15f;
-    public float visualLeanSmooth = 10f;
+
+    [Tooltip("How much the visual model tilts left/right from steering input.")]
+    public float visualTurnLean = 22f;
+
+    [Tooltip("Minimum movement speed before the visual model starts using live travel direction.")]
     public float minVisualSpeedForFacing = 0.75f;
+
+    [Header("Debug")]
+    [Tooltip("If true, draws on-screen speed debug.")]
+    public bool showSpeedDebug = true;
 
     private Rigidbody rb;
     private SphereCollider sphereCol;
@@ -115,7 +235,6 @@ public class HamsterBallController : MonoBehaviour
     private bool isGrounded;
     private Vector3 lastGroundNormal = Vector3.up;
 
-    private Quaternion visualLean = Quaternion.identity;
     private Vector3 smoothedVisualForward = Vector3.forward;
     private Vector3 visualVelocityRef;
     private Vector3 lastStableMoveDirection = Vector3.forward;
@@ -189,14 +308,16 @@ public class HamsterBallController : MonoBehaviour
 
     private void FixedUpdate()
     {
-        jumpTimer -= Time.fixedDeltaTime;
-        jumpDetachTimer -= Time.fixedDeltaTime;
-        groundedTimer -= Time.fixedDeltaTime;
-        stickGraceTimer -= Time.fixedDeltaTime;
-        dashTimer -= Time.fixedDeltaTime;
-        dashCooldownTimer -= Time.fixedDeltaTime;
+        float dt = Time.fixedDeltaTime;
 
-        chainRetargetLockoutTimer -= Time.fixedDeltaTime;
+        jumpTimer -= dt;
+        jumpDetachTimer -= dt;
+        groundedTimer -= dt;
+        stickGraceTimer -= dt;
+        dashTimer -= dt;
+        dashCooldownTimer -= dt;
+
+        chainRetargetLockoutTimer -= dt;
         if (chainRetargetLockoutTimer < 0f)
             chainRetargetLockoutTimer = 0f;
 
@@ -213,12 +334,12 @@ public class HamsterBallController : MonoBehaviour
 
         isGrounded = groundedTimer > 0f;
 
-        UpdateFacing();
         HandleFreeDash();
         HandleTargetAttack();
 
-        ApplyDrive();
-        ApplyCarving();
+        ApplyDrive(dt);
+        ApplyDirectionalGrip(dt);
+        UpdateFacingFromMovement();
         ApplyGroundStick();
         ApplyJumpGravity();
         HandleJump();
@@ -230,7 +351,7 @@ public class HamsterBallController : MonoBehaviour
         if (groundedTimer <= 0f)
             isGrounded = false;
 
-        boostTimer -= Time.fixedDeltaTime;
+        boostTimer -= dt;
 
         if (boostTimer <= 0f)
         {
@@ -298,13 +419,54 @@ public class HamsterBallController : MonoBehaviour
         dashCooldownTimer = 0f;
     }
 
-    private void UpdateFacing()
+    private float GetCurrentSteerAngleDegrees()
     {
-        if ((IsDashing && lockSteeringDuringDash) || isChainDashing || isInChainHitStop)
+        if (!useSpeedScaledSteering)
+            return maxSteerAngleDegrees;
+
+        float refSpeed = Mathf.Max(0.01f, speedForMinSteer);
+        float speed01 = Mathf.Clamp01(GetHorizontalVelocity().magnitude / refSpeed);
+        return Mathf.Lerp(lowSpeedSteerAngleDegrees, highSpeedSteerAngleDegrees, speed01);
+    }
+
+    private Vector3 GetForwardFromFacing()
+    {
+        Vector3 forward = Quaternion.Euler(0f, facingYaw, 0f) * Vector3.forward;
+        forward.y = 0f;
+
+        if (forward.sqrMagnitude < 0.001f)
+            forward = Vector3.forward;
+
+        forward.Normalize();
+        return forward;
+    }
+
+    private Vector3 GetBiasedMoveDirection()
+    {
+        Vector3 forward = GetForwardFromFacing();
+        float steerAngle = steerInput * GetCurrentSteerAngleDegrees();
+
+        Vector3 moveDir = Quaternion.AngleAxis(steerAngle, Vector3.up) * forward;
+        moveDir.y = 0f;
+
+        if (moveDir.sqrMagnitude < 0.001f)
+            return forward;
+
+        return moveDir.normalized;
+    }
+
+    private void UpdateFacingFromMovement()
+    {
+        if (isChainDashing || isInChainHitStop)
             return;
 
-        float turnSpeed = isGrounded ? groundYawTurnSpeed : airYawTurnSpeed;
-        facingYaw += steerInput * turnSpeed * Time.deltaTime;
+        Vector3 horizontal = GetHorizontalVelocity();
+        if (horizontal.sqrMagnitude < (minSpeedToUpdateFacing * minSpeedToUpdateFacing))
+            return;
+
+        horizontal.y = 0f;
+        horizontal.Normalize();
+        facingYaw = Mathf.Atan2(horizontal.x, horizontal.z) * Mathf.Rad2Deg;
     }
 
     private void HandleFreeDash()
@@ -317,10 +479,13 @@ public class HamsterBallController : MonoBehaviour
 
         SpendLoveForDash();
 
-        // Dash always straight ahead based on current facing.
-        dashDirection = GetAimDirection();
-
         Vector3 horizontal = GetHorizontalVelocity();
+
+        if (horizontal.sqrMagnitude > 0.001f)
+            dashDirection = horizontal.normalized;
+        else
+            dashDirection = GetForwardFromFacing();
+
         float currentSpeedAlongDash = Vector3.Dot(horizontal, dashDirection);
         float targetSpeed = Mathf.Max(dashStartSpeed, currentSpeedAlongDash);
 
@@ -345,23 +510,10 @@ public class HamsterBallController : MonoBehaviour
         StartChainDash(target);
     }
 
-    private Vector3 GetAimDirection()
-    {
-        Vector3 forward = Quaternion.Euler(0f, facingYaw, 0f) * Vector3.forward;
-        forward.y = 0f;
-
-        if (forward.sqrMagnitude < 0.001f)
-            forward = transform.forward;
-
-        forward.y = 0f;
-        forward.Normalize();
-        return forward;
-    }
-
     private ChainDashTarget FindBestChainTarget()
     {
         Vector3 origin = transform.position;
-        Vector3 aimForward = GetAimDirection();
+        Vector3 aimForward = GetForwardFromFacing();
 
         Collider[] hits = Physics.OverlapSphere(
             origin,
@@ -449,7 +601,7 @@ public class HamsterBallController : MonoBehaviour
         Vector3 pullDir = toAim.normalized;
 
         if (pullDir.sqrMagnitude < 0.001f)
-            pullDir = GetAimDirection();
+            pullDir = GetForwardFromFacing();
 
         rb.linearVelocity = pullDir * chainPullSpeed;
         dashDirection = new Vector3(pullDir.x, 0f, pullDir.z).normalized;
@@ -505,7 +657,7 @@ public class HamsterBallController : MonoBehaviour
 
         Vector3 flatLaunch = new Vector3(launchDir.x, 0f, launchDir.z);
         if (flatLaunch.sqrMagnitude < 0.001f)
-            flatLaunch = GetAimDirection();
+            flatLaunch = GetForwardFromFacing();
 
         flatLaunch.Normalize();
 
@@ -572,11 +724,9 @@ public class HamsterBallController : MonoBehaviour
             loveMeter.TrySpendLove(dashLoveCost);
     }
 
-    private void ApplyDrive()
+    private void ApplyDrive(float dt)
     {
-        Vector3 desiredForward = Quaternion.Euler(0f, facingYaw, 0f) * Vector3.forward;
-        desiredForward.y = 0f;
-        desiredForward.Normalize();
+        Vector3 desiredForward = GetBiasedMoveDirection();
 
         float accelToApply = forwardAcceleration + boostAccelerationBonus;
 
@@ -605,8 +755,7 @@ public class HamsterBallController : MonoBehaviour
             if (flatPull.sqrMagnitude > 0.001f)
             {
                 flatPull.Normalize();
-                float targetYaw = Mathf.Atan2(flatPull.x, flatPull.z) * Mathf.Rad2Deg;
-                facingYaw = Mathf.LerpAngle(facingYaw, targetYaw, chainPullFacingSpeed * Time.fixedDeltaTime);
+                facingYaw = Mathf.Atan2(flatPull.x, flatPull.z) * Mathf.Rad2Deg;
                 dashDirection = flatPull;
             }
 
@@ -614,76 +763,96 @@ public class HamsterBallController : MonoBehaviour
         }
         else if (dashTimer > 0f)
         {
-            desiredForward = dashDirection;
+            if (lockSteeringDuringDash)
+            {
+                desiredForward = dashDirection;
+            }
+            else
+            {
+                desiredForward = GetBiasedMoveDirection();
+                dashDirection = desiredForward;
+            }
+
             accelToApply += dashAcceleration;
             maxSpeed = Mathf.Max(maxSpeed, dashMaxSpeed);
             isUsingDashDrive = true;
+
+            Vector3 currentHorizontal = GetHorizontalVelocity();
+            float dashSpeed = Mathf.Max(currentHorizontal.magnitude, dashStartSpeed);
+            Vector3 redirected = desiredForward * dashSpeed;
+            rb.linearVelocity = new Vector3(redirected.x, rb.linearVelocity.y, redirected.z);
         }
 
-        if (isUsingDashDrive)
-            return;
+        if (!isUsingDashDrive)
+        {
+            Vector3 horizontalVelocity = GetHorizontalVelocity();
+            float currentSpeed = horizontalVelocity.magnitude;
+            bool overspeed = currentSpeed > maxSpeed;
 
-        Vector3 horizontalVelocity = GetHorizontalVelocity();
-        float speed = horizontalVelocity.magnitude;
-        bool overspeed = speed > maxSpeed;
+            bool shouldApplyDrive = true;
+            if (suppressDriveWhileOverspeed && overspeed)
+                shouldApplyDrive = false;
 
-        bool shouldApplyDrive = true;
+            if (shouldApplyDrive)
+                rb.AddForce(desiredForward * accelToApply, ForceMode.Acceleration);
 
-        if (suppressDriveWhileOverspeed && overspeed)
-            shouldApplyDrive = false;
+            if (currentSpeed > 0.001f && Mathf.Abs(steerInput) > 0.001f)
+            {
+                float preservedSpeed = Mathf.Lerp(currentSpeed, Mathf.Max(currentSpeed, baseMaxSpeed), turnSpeedPreservation);
+                Vector3 redirected = desiredForward * preservedSpeed;
+                rb.linearVelocity = new Vector3(redirected.x, rb.linearVelocity.y, redirected.z);
+            }
+        }
 
-        if (shouldApplyDrive)
-            rb.AddForce(desiredForward * accelToApply, ForceMode.Acceleration);
+        Vector3 newHorizontal = GetHorizontalVelocity();
+        float newSpeed = newHorizontal.magnitude;
+        bool stillOverspeed = newSpeed > maxSpeed;
 
-        horizontalVelocity = GetHorizontalVelocity();
-        speed = horizontalVelocity.magnitude;
-        overspeed = speed > maxSpeed;
-
-        if (overspeed)
+        if (stillOverspeed)
         {
             if (useSmoothOverSpeedDecay)
             {
-                float newSpeed = Mathf.MoveTowards(
-                    speed,
+                float clampedSpeed = Mathf.MoveTowards(
+                    newSpeed,
                     maxSpeed,
-                    overSpeedDeceleration * Time.fixedDeltaTime
+                    overSpeedDeceleration * dt
                 );
 
-                Vector3 adjusted = horizontalVelocity.normalized * newSpeed;
+                Vector3 adjusted = newHorizontal.normalized * clampedSpeed;
                 rb.linearVelocity = new Vector3(adjusted.x, rb.linearVelocity.y, adjusted.z);
             }
             else
             {
-                Vector3 clamped = horizontalVelocity.normalized * maxSpeed;
+                Vector3 clamped = newHorizontal.normalized * maxSpeed;
                 rb.linearVelocity = new Vector3(clamped.x, rb.linearVelocity.y, clamped.z);
             }
         }
     }
 
-    private void ApplyCarving()
+    private void ApplyDirectionalGrip(float dt)
     {
-        if ((IsDashing && lockCarvingDuringDash) || isChainDashing || isInChainHitStop)
+        if (isChainDashing || isInChainHitStop)
             return;
 
-        Vector3 horizontalVelocity = GetHorizontalVelocity();
-        float speed = horizontalVelocity.magnitude;
-
-        if (speed < carveMinSpeed)
+        Vector3 horizontal = GetHorizontalVelocity();
+        if (horizontal.sqrMagnitude < 0.0001f)
             return;
 
-        Vector3 desiredForward = Quaternion.Euler(0f, facingYaw, 0f) * Vector3.forward;
-        desiredForward.y = 0f;
-        desiredForward.Normalize();
+        Vector3 forward = GetForwardFromFacing();
+        float forwardSpeed = Vector3.Dot(horizontal, forward);
 
-        float carveStrength = isGrounded ? groundCarveStrength : airCarveStrength;
+        Vector3 forwardVelocity = forward * forwardSpeed;
+        Vector3 lateralVelocity = horizontal - forwardVelocity;
 
-        Vector3 bentVelocity = Vector3.Slerp(
-            horizontalVelocity.normalized,
-            desiredForward,
-            carveStrength * Time.fixedDeltaTime
-        ) * speed;
+        float grip = isGrounded ? groundLateralGrip : airLateralGrip;
+        Vector3 lateralReduction = Vector3.MoveTowards(
+            lateralVelocity,
+            Vector3.zero,
+            grip * dt
+        );
 
-        rb.linearVelocity = new Vector3(bentVelocity.x, rb.linearVelocity.y, bentVelocity.z);
+        Vector3 correctedHorizontal = forwardVelocity + lateralReduction;
+        rb.linearVelocity = new Vector3(correctedHorizontal.x, rb.linearVelocity.y, correctedHorizontal.z);
     }
 
     private void ApplyGroundStick()
@@ -768,7 +937,7 @@ public class HamsterBallController : MonoBehaviour
 
         targetForward.y = 0f;
         if (targetForward.sqrMagnitude < 0.001f)
-            targetForward = Quaternion.Euler(0f, facingYaw, 0f) * Vector3.forward;
+            targetForward = GetForwardFromFacing();
 
         targetForward.Normalize();
 
@@ -779,18 +948,12 @@ public class HamsterBallController : MonoBehaviour
         ).normalized;
 
         float leanAmount = 0f;
-        if (!(IsDashing && lockSteeringDuringDash) && !isChainDashing && !isInChainHitStop)
+        if ((!IsDashing || !lockSteeringDuringDash) && !isChainDashing && !isInChainHitStop)
             leanAmount = -steerInput * visualTurnLean;
 
-        Quaternion targetLean = Quaternion.AngleAxis(leanAmount, Vector3.forward);
-
-        visualLean = Quaternion.Slerp(
-            visualLean,
-            targetLean,
-            visualLeanSmooth * Time.deltaTime
-        );
-
-        visualRoot.rotation = Quaternion.LookRotation(smoothedVisualForward, Vector3.up) * visualLean;
+        visualRoot.rotation =
+            Quaternion.LookRotation(smoothedVisualForward, Vector3.up) *
+            Quaternion.AngleAxis(leanAmount, Vector3.forward);
     }
 
     private void OnCollisionEnter(Collision collision)
@@ -886,15 +1049,9 @@ public class HamsterBallController : MonoBehaviour
             Vector3 boostDir;
 
             if (horizontal.sqrMagnitude > 0.001f)
-            {
                 boostDir = horizontal.normalized;
-            }
             else
-            {
-                boostDir = Quaternion.Euler(0f, facingYaw, 0f) * Vector3.forward;
-                boostDir.y = 0f;
-                boostDir.Normalize();
-            }
+                boostDir = GetForwardFromFacing();
 
             float currentSpeed = horizontal.magnitude;
             float boostedSpeed = currentSpeed + instantSpeedBonus;
@@ -912,5 +1069,19 @@ public class HamsterBallController : MonoBehaviour
     public bool HasActiveSpeedBoost()
     {
         return boostTimer > 0f;
+    }
+
+    private void OnGUI()
+    {
+        if (!showSpeedDebug)
+            return;
+
+        float speed = GetHorizontalVelocity().magnitude;
+
+        GUIStyle style = new GUIStyle(GUI.skin.label);
+        style.fontSize = 22;
+        style.normal.textColor = Color.white;
+
+        GUI.Label(new Rect(20, 20, 320, 30), $"Speed: {speed:F1}", style);
     }
 }
