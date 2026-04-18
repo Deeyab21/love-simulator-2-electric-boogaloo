@@ -194,6 +194,49 @@ public class HamsterBallController : MonoBehaviour
     [Tooltip("Maximum upward-away speed that ground stick is allowed to cancel.")]
     public float maxStickAwaySpeed = 6f;
 
+    [Header("Guard Rail Assist")]
+    [Tooltip("Layers treated as guard rails.")]
+    public LayerMask guardRailLayers = 0;
+
+    [Tooltip("How far ahead the guard rail probe checks.")]
+    public float guardRailProbeDistance = 1.2f;
+
+    [Tooltip("Radius used for the guard rail spherecast.")]
+    public float guardRailProbeRadius = 0.45f;
+
+    [Tooltip("Vertical offset of the guard rail probe from the rigidbody position.")]
+    public float guardRailProbeHeight = 0.2f;
+
+    [Tooltip("Minimum speed into the rail required before a bounce assist happens.")]
+    public float minimumRailImpactSpeed = 2f;
+
+    [Tooltip("Base outward shove speed when hitting a rail.")]
+    public float railRepelSpeed = 16f;
+
+    [Tooltip("Extra outward shove based on incoming speed into the rail.")]
+    public float railRepelFromImpactMultiplier = 0.45f;
+
+    [Tooltip("Maximum incoming speed counted for the repel bonus.")]
+    public float maxRailImpactSpeedForBonus = 35f;
+
+    [Tooltip("How much along-rail momentum is preserved. 1 = keep it all.")]
+    [Range(0f, 1.25f)] public float railMomentumPreservation = 1f;
+
+    [Tooltip("Minimum horizontal speed kept after bouncing off a rail.")]
+    public float minimumRailExitSpeed = 18f;
+
+    [Tooltip("How far the player is nudged away from the rail after the bounce.")]
+    public float railSeparationDistance = 0.35f;
+
+    [Tooltip("Cooldown before another guard rail assist can trigger.")]
+    public float railBounceCooldown = 0.14f;
+
+    [Tooltip("How long movement back into the hit rail is blocked.")]
+    public float railReentryBlockDuration = 0.18f;
+
+    [Tooltip("Minimum outward velocity preserved while the rail re-entry block is active.")]
+    public float railMinimumOutwardSpeedDuringBlock = 8f;
+
     [Header("Visuals")]
     [Tooltip("Vertical offset for the visual model.")]
     public float rideHeight = 0.9f;
@@ -214,6 +257,9 @@ public class HamsterBallController : MonoBehaviour
     [Tooltip("If true, draws on-screen speed debug.")]
     public bool showSpeedDebug = true;
 
+    [Tooltip("If true, draws the guard rail probe and hit normal.")]
+    public bool drawGuardRailDebug = true;
+
     private Rigidbody rb;
     private SphereCollider sphereCol;
 
@@ -230,7 +276,6 @@ public class HamsterBallController : MonoBehaviour
 
     private float dashTimer;
     private float dashCooldownTimer;
-    private Vector3 dashDirection = Vector3.forward;
 
     private bool isGrounded;
     private Vector3 lastGroundNormal = Vector3.up;
@@ -246,6 +291,13 @@ public class HamsterBallController : MonoBehaviour
     private bool isInChainHitStop;
     private Coroutine chainHitRoutine;
     private float chainRetargetLockoutTimer;
+
+    private float railBounceCooldownTimer;
+    private float railReentryBlockTimer;
+    private Vector3 blockedRailNormal = Vector3.zero;
+
+    private RaycastHit lastGuardRailHit;
+    private bool hasLastGuardRailHit;
 
     private float JumpLaunchSpeed => (2f * jumpHeight) / Mathf.Max(0.01f, timeToApex);
     private float RiseGravity => (2f * jumpHeight) / Mathf.Max(0.01f, timeToApex * timeToApex);
@@ -280,7 +332,6 @@ public class HamsterBallController : MonoBehaviour
         startForward.Normalize();
         smoothedVisualForward = startForward;
         lastStableMoveDirection = startForward;
-        dashDirection = startForward;
     }
 
     private void Update()
@@ -316,10 +367,17 @@ public class HamsterBallController : MonoBehaviour
         stickGraceTimer -= dt;
         dashTimer -= dt;
         dashCooldownTimer -= dt;
-
         chainRetargetLockoutTimer -= dt;
-        if (chainRetargetLockoutTimer < 0f)
-            chainRetargetLockoutTimer = 0f;
+        railBounceCooldownTimer -= dt;
+        railReentryBlockTimer -= dt;
+
+        if (chainRetargetLockoutTimer < 0f) chainRetargetLockoutTimer = 0f;
+        if (railBounceCooldownTimer < 0f) railBounceCooldownTimer = 0f;
+        if (railReentryBlockTimer < 0f)
+        {
+            railReentryBlockTimer = 0f;
+            blockedRailNormal = Vector3.zero;
+        }
 
         CheckRespawn();
 
@@ -339,6 +397,8 @@ public class HamsterBallController : MonoBehaviour
 
         ApplyDrive(dt);
         ApplyDirectionalGrip(dt);
+        ApplyRailReentryBlock();
+        TryGuardRailBounce();
         UpdateFacingFromMovement();
         ApplyGroundStick();
         ApplyJumpGravity();
@@ -352,7 +412,6 @@ public class HamsterBallController : MonoBehaviour
             isGrounded = false;
 
         boostTimer -= dt;
-
         if (boostTimer <= 0f)
         {
             boostTimer = 0f;
@@ -391,6 +450,11 @@ public class HamsterBallController : MonoBehaviour
         isInChainHitStop = false;
         chainRetargetLockoutTimer = 0f;
 
+        railBounceCooldownTimer = 0f;
+        railReentryBlockTimer = 0f;
+        blockedRailNormal = Vector3.zero;
+        hasLastGuardRailHit = false;
+
         Vector3 targetPos = respawnPoint != null ? respawnPoint.position : Vector3.zero;
         Quaternion targetRot = respawnPoint != null ? respawnPoint.rotation : Quaternion.identity;
 
@@ -409,7 +473,6 @@ public class HamsterBallController : MonoBehaviour
         forward.Normalize();
         smoothedVisualForward = forward;
         lastStableMoveDirection = forward;
-        dashDirection = forward;
 
         isGrounded = false;
         groundedTimer = 0f;
@@ -480,6 +543,7 @@ public class HamsterBallController : MonoBehaviour
         SpendLoveForDash();
 
         Vector3 horizontal = GetHorizontalVelocity();
+        Vector3 dashDirection;
 
         if (horizontal.sqrMagnitude > 0.001f)
             dashDirection = horizontal.normalized;
@@ -604,7 +668,6 @@ public class HamsterBallController : MonoBehaviour
             pullDir = GetForwardFromFacing();
 
         rb.linearVelocity = pullDir * chainPullSpeed;
-        dashDirection = new Vector3(pullDir.x, 0f, pullDir.z).normalized;
 
         TriggerSharedSpeedCameraKick();
     }
@@ -679,7 +742,6 @@ public class HamsterBallController : MonoBehaviour
         rb.angularVelocity = Vector3.zero;
 
         facingYaw = Mathf.Atan2(flatLaunch.x, flatLaunch.z) * Mathf.Rad2Deg;
-        dashDirection = flatLaunch;
 
         isInChainHitStop = false;
 
@@ -728,6 +790,20 @@ public class HamsterBallController : MonoBehaviour
     {
         Vector3 desiredForward = GetBiasedMoveDirection();
 
+        if (railReentryBlockTimer > 0f && blockedRailNormal.sqrMagnitude > 0.0001f)
+        {
+            float intoRail = Vector3.Dot(desiredForward, -blockedRailNormal);
+            if (intoRail > 0f)
+            {
+                desiredForward = Vector3.ProjectOnPlane(desiredForward, blockedRailNormal);
+                if (desiredForward.sqrMagnitude < 0.001f)
+                    desiredForward = Vector3.ProjectOnPlane(GetForwardFromFacing(), blockedRailNormal);
+
+                if (desiredForward.sqrMagnitude > 0.001f)
+                    desiredForward.Normalize();
+            }
+        }
+
         float accelToApply = forwardAcceleration + boostAccelerationBonus;
 
         float baseMaxSpeed = isGrounded ? maxGroundSpeed : maxAirSpeed;
@@ -756,7 +832,6 @@ public class HamsterBallController : MonoBehaviour
             {
                 flatPull.Normalize();
                 facingYaw = Mathf.Atan2(flatPull.x, flatPull.z) * Mathf.Rad2Deg;
-                dashDirection = flatPull;
             }
 
             isUsingDashDrive = true;
@@ -765,12 +840,13 @@ public class HamsterBallController : MonoBehaviour
         {
             if (lockSteeringDuringDash)
             {
-                desiredForward = dashDirection;
+                desiredForward = GetHorizontalVelocity().sqrMagnitude > 0.001f
+                    ? GetHorizontalVelocity().normalized
+                    : GetForwardFromFacing();
             }
             else
             {
                 desiredForward = GetBiasedMoveDirection();
-                dashDirection = desiredForward;
             }
 
             accelToApply += dashAcceleration;
@@ -812,12 +888,7 @@ public class HamsterBallController : MonoBehaviour
         {
             if (useSmoothOverSpeedDecay)
             {
-                float clampedSpeed = Mathf.MoveTowards(
-                    newSpeed,
-                    maxSpeed,
-                    overSpeedDeceleration * dt
-                );
-
+                float clampedSpeed = Mathf.MoveTowards(newSpeed, maxSpeed, overSpeedDeceleration * dt);
                 Vector3 adjusted = newHorizontal.normalized * clampedSpeed;
                 rb.linearVelocity = new Vector3(adjusted.x, rb.linearVelocity.y, adjusted.z);
             }
@@ -845,14 +916,93 @@ public class HamsterBallController : MonoBehaviour
         Vector3 lateralVelocity = horizontal - forwardVelocity;
 
         float grip = isGrounded ? groundLateralGrip : airLateralGrip;
-        Vector3 lateralReduction = Vector3.MoveTowards(
-            lateralVelocity,
-            Vector3.zero,
-            grip * dt
-        );
+        Vector3 lateralReduction = Vector3.MoveTowards(lateralVelocity, Vector3.zero, grip * dt);
 
         Vector3 correctedHorizontal = forwardVelocity + lateralReduction;
         rb.linearVelocity = new Vector3(correctedHorizontal.x, rb.linearVelocity.y, correctedHorizontal.z);
+    }
+
+    private void ApplyRailReentryBlock()
+    {
+        if (railReentryBlockTimer <= 0f || blockedRailNormal.sqrMagnitude < 0.0001f)
+            return;
+
+        Vector3 horizontal = GetHorizontalVelocity();
+
+        float intoRail = Vector3.Dot(horizontal, -blockedRailNormal);
+        if (intoRail > 0f)
+            horizontal += blockedRailNormal * intoRail;
+
+        float outward = Vector3.Dot(horizontal, blockedRailNormal);
+        if (outward < railMinimumOutwardSpeedDuringBlock)
+            horizontal += blockedRailNormal * (railMinimumOutwardSpeedDuringBlock - outward);
+
+        rb.linearVelocity = new Vector3(horizontal.x, rb.linearVelocity.y, horizontal.z);
+    }
+
+    private void TryGuardRailBounce()
+    {
+        hasLastGuardRailHit = false;
+
+        if (guardRailLayers.value == 0)
+            return;
+
+        if (railBounceCooldownTimer > 0f)
+            return;
+
+        Vector3 horizontal = GetHorizontalVelocity();
+        float speed = horizontal.magnitude;
+
+        if (speed < minimumRailImpactSpeed)
+            return;
+
+        Vector3 probeDir = horizontal.normalized;
+        Vector3 origin = rb.position + Vector3.up * guardRailProbeHeight;
+
+        if (!Physics.SphereCast(
+                origin,
+                guardRailProbeRadius,
+                probeDir,
+                out RaycastHit hit,
+                guardRailProbeDistance,
+                guardRailLayers,
+                QueryTriggerInteraction.Ignore))
+        {
+            return;
+        }
+
+        hasLastGuardRailHit = true;
+        lastGuardRailHit = hit;
+
+        Vector3 railNormal = hit.normal;
+        railNormal.y = 0f;
+
+        if (railNormal.sqrMagnitude < 0.0001f)
+            return;
+
+        railNormal.Normalize();
+
+        float intoRailSpeed = Mathf.Max(0f, Vector3.Dot(horizontal, -railNormal));
+        if (intoRailSpeed < minimumRailImpactSpeed)
+            return;
+
+        Vector3 alongRail = Vector3.ProjectOnPlane(horizontal, railNormal) * railMomentumPreservation;
+
+        float repelBonus = Mathf.Min(intoRailSpeed, maxRailImpactSpeedForBonus) * railRepelFromImpactMultiplier;
+        float repel = railRepelSpeed + repelBonus;
+
+        Vector3 newHorizontal = alongRail + railNormal * repel;
+
+        float minimumExitSpeed = Mathf.Max(speed * railMomentumPreservation, minimumRailExitSpeed);
+        if (newHorizontal.sqrMagnitude > 0.001f && newHorizontal.magnitude < minimumExitSpeed)
+            newHorizontal = newHorizontal.normalized * minimumExitSpeed;
+
+        rb.linearVelocity = new Vector3(newHorizontal.x, rb.linearVelocity.y, newHorizontal.z);
+        rb.position += railNormal * railSeparationDistance;
+
+        blockedRailNormal = railNormal;
+        railReentryBlockTimer = railReentryBlockDuration;
+        railBounceCooldownTimer = railBounceCooldown;
     }
 
     private void ApplyGroundStick()
@@ -869,7 +1019,6 @@ public class HamsterBallController : MonoBehaviour
         rb.AddForce(-groundUp * groundStickForce, ForceMode.Acceleration);
 
         float awaySpeed = Vector3.Dot(rb.linearVelocity, groundUp);
-
         if (awaySpeed > 0f && awaySpeed < maxStickAwaySpeed)
             rb.linearVelocity -= groundUp * awaySpeed;
     }
@@ -1046,12 +1195,7 @@ public class HamsterBallController : MonoBehaviour
         if (instantSpeedBonus > 0f)
         {
             Vector3 horizontal = GetHorizontalVelocity();
-            Vector3 boostDir;
-
-            if (horizontal.sqrMagnitude > 0.001f)
-                boostDir = horizontal.normalized;
-            else
-                boostDir = GetForwardFromFacing();
+            Vector3 boostDir = horizontal.sqrMagnitude > 0.001f ? horizontal.normalized : GetForwardFromFacing();
 
             float currentSpeed = horizontal.magnitude;
             float boostedSpeed = currentSpeed + instantSpeedBonus;
@@ -1083,5 +1227,51 @@ public class HamsterBallController : MonoBehaviour
         style.normal.textColor = Color.white;
 
         GUI.Label(new Rect(20, 20, 320, 30), $"Speed: {speed:F1}", style);
+    }
+
+    private void OnDrawGizmos()
+    {
+        if (!drawGuardRailDebug)
+            return;
+
+        Rigidbody body = Application.isPlaying ? rb : GetComponent<Rigidbody>();
+        if (body == null)
+            return;
+
+        Vector3 horizontal = Application.isPlaying ? GetHorizontalVelocity() : transform.forward;
+        horizontal.y = 0f;
+
+        if (horizontal.sqrMagnitude < 0.001f)
+            horizontal = transform.forward;
+
+        horizontal.y = 0f;
+        horizontal.Normalize();
+
+        Vector3 origin = body.position + Vector3.up * guardRailProbeHeight;
+        Vector3 end = origin + horizontal * guardRailProbeDistance;
+
+        Gizmos.color = Color.green;
+        Gizmos.DrawWireSphere(origin, guardRailProbeRadius);
+        Gizmos.DrawWireSphere(end, guardRailProbeRadius);
+        Gizmos.DrawLine(origin, end);
+
+        if (Application.isPlaying && hasLastGuardRailHit)
+        {
+            Gizmos.color = Color.red;
+            Gizmos.DrawSphere(lastGuardRailHit.point, 0.08f);
+            Gizmos.DrawLine(
+                lastGuardRailHit.point,
+                lastGuardRailHit.point + lastGuardRailHit.normal.normalized * 1.2f
+            );
+        }
+
+        if (Application.isPlaying && railReentryBlockTimer > 0f && blockedRailNormal.sqrMagnitude > 0.0001f)
+        {
+            Gizmos.color = Color.cyan;
+            Gizmos.DrawLine(
+                body.position,
+                body.position + blockedRailNormal.normalized * 2f
+            );
+        }
     }
 }
