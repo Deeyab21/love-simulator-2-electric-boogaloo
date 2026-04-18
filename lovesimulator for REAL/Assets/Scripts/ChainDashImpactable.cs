@@ -135,6 +135,18 @@ public class ChainDashImpactable : MonoBehaviour
         }
     }
 
+    private void SafeClearBodyMotion(Rigidbody rb)
+    {
+        if (rb == null)
+            return;
+
+        if (!rb.isKinematic)
+        {
+            rb.linearVelocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
+        }
+    }
+
     [ContextMenu("Apply Pre-Impact State")]
     public void ApplyPreImpactState()
     {
@@ -147,9 +159,6 @@ public class ChainDashImpactable : MonoBehaviour
             if (rb == null)
                 continue;
 
-            rb.linearVelocity = Vector3.zero;
-            rb.angularVelocity = Vector3.zero;
-
             if (keepBodiesKinematicUntilImpact)
                 rb.isKinematic = true;
 
@@ -158,6 +167,9 @@ public class ChainDashImpactable : MonoBehaviour
 
             if (disableCollisionsUntilImpact)
                 rb.detectCollisions = false;
+
+            // Only clear motion if the body is actually dynamic.
+            SafeClearBodyMotion(rb);
         }
     }
 
@@ -190,9 +202,6 @@ public class ChainDashImpactable : MonoBehaviour
             if (rb == null)
                 continue;
 
-            rb.linearVelocity = Vector3.zero;
-            rb.angularVelocity = Vector3.zero;
-
             if (disableCollisionsUntilImpact)
                 rb.detectCollisions = true;
 
@@ -204,6 +213,9 @@ public class ChainDashImpactable : MonoBehaviour
 
             if (clearConstraintsOnImpact)
                 rb.constraints = RigidbodyConstraints.None;
+
+            // Clear motion only after the body has been made dynamic.
+            SafeClearBodyMotion(rb);
 
             rb.WakeUp();
         }
@@ -277,9 +289,6 @@ public class ChainDashImpactable : MonoBehaviour
             if (rb == null)
                 continue;
 
-            rb.linearVelocity = Vector3.zero;
-            rb.angularVelocity = Vector3.zero;
-
             if (originalConstraints != null && i < originalConstraints.Length)
                 rb.constraints = originalConstraints[i];
 
@@ -297,6 +306,9 @@ public class ChainDashImpactable : MonoBehaviour
                 rb.detectCollisions = false;
             else if (originalDetectCollisionStates != null && i < originalDetectCollisionStates.Length)
                 rb.detectCollisions = originalDetectCollisionStates[i];
+
+            // Only clear motion if the reset state leaves the body dynamic.
+            SafeClearBodyMotion(rb);
         }
     }
 }
