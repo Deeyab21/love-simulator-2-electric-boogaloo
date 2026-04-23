@@ -1,6 +1,6 @@
 ﻿using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
+using Dreamteck.Splines;
 
 [RequireComponent(typeof(Rigidbody))]
 [RequireComponent(typeof(SphereCollider))]
@@ -154,6 +154,62 @@ public class HamsterBallController : MonoBehaviour
     [Tooltip("How long attack target re-locking is prevented after a chain launch.")]
     public float chainRetargetLockoutDuration = 0.18f;
 
+    [Header("Rail Grinding")]
+    [Tooltip("All rail grind splines in the scene. Leave empty to auto-find.")]
+    public RailGrindSplineDreamteck[] railSplines;
+
+    [Tooltip("If true, the player root rotates to match the rail frame while grinding.")]
+    public bool rotateRootToRail = true;
+
+    [Tooltip("How quickly the player root rotates to match the rail frame.")]
+    public float railRootRotationSpeed = 20f;
+
+
+    [Tooltip("Maximum angle allowed when locking onto a rail.")]
+    [Range(1f, 180f)] public float railTargetMaxAngle = 55f;
+
+    [Tooltip("Minimum speed when snapping onto a rail.")]
+    public float railSnapSpeed = 40f;
+
+    [Tooltip("Target grind speed.")]
+    public float railGrindSpeed = 52f;
+
+    [Tooltip("How quickly grind speed approaches target speed.")]
+    public float railGrindAcceleration = 70f;
+
+    [Tooltip("Extra force pulling the player onto the rail center while grinding.")]
+    public float railStickStrength = 35f;
+
+    [Tooltip("How quickly the player visually aligns to the rail.")]
+    public float railAlignSpeed = 18f;
+
+    [Tooltip("Extra forward speed added when jumping off a rail.")]
+    public float railJumpForwardBoost = 10f;
+
+    [Tooltip("Extra upward speed added when jumping off a rail.")]
+    public float railJumpUpBoost = 9f;
+
+    [Tooltip("Cooldown before the player can switch rails again.")]
+    public float railSwitchCooldown = 0.20f;
+
+    [Tooltip("How close another rail must be to allow switching.")]
+    public float railSwitchDistance = 3.0f;
+
+    [Tooltip("Minimum left/right input needed to try switching rails.")]
+    public float railSwitchInputThreshold = 0.45f;
+
+    [Tooltip("Small push away from the rail when exiting so the player doesn't instantly sit back inside the catch zone.")]
+    public float railExitSeparation = 0.4f;
+
+    [Tooltip("How long rail locking is disabled after jumping off or exiting a rail.")]
+    public float railRelockCooldown = 0.35f;
+
+    [Tooltip("If true, jumping off a rail starts the relock cooldown.")]
+    public bool disableRailRelockAfterJump = true;
+
+    [Tooltip("If true, reaching the end of a rail starts the relock cooldown.")]
+    public bool disableRailRelockAfterRailEnd = true;
+
     [Header("Shared Speed Camera Kick")]
     [Tooltip("If true, dashes and boosts trigger the shared speed camera kick.")]
     public bool triggerSpeedCameraKick = true;
@@ -275,11 +331,19 @@ public class HamsterBallController : MonoBehaviour
     private Vector3 roadAttachmentUp = Vector3.up;
     private Vector3 roadAttachmentForward = Vector3.forward;
 
+    private RailGrindSplineDreamteck activeRailSpline;
+    private RailGrindSplineDreamteck.RailSample activeRailSample;
+    private bool isRailGrinding;
+    private float railTravelDirection = 1f;
+    private float currentRailSpeed = 0f;
+    private float railSwitchCooldownTimer = 0f;
+    private float railRelockTimer = 0f;
+
     private float JumpLaunchSpeed => (2f * jumpHeight) / Mathf.Max(0.01f, timeToApex);
     private float RiseGravity => (2f * jumpHeight) / Mathf.Max(0.01f, timeToApex * timeToApex);
     private float FallGravity => (2f * jumpHeight) / Mathf.Max(0.01f, timeToDescend * timeToDescend);
 
-    public bool IsDashing => dashTimer > 0f || isChainDashing || isInChainHitStop;
+    public bool IsDashing => dashTimer > 0f || isChainDashing || isInChainHitStop || isRailGrinding;
 
     private void Awake()
     {
@@ -301,6 +365,8 @@ public class HamsterBallController : MonoBehaviour
         if (roadSplineSampler == null)
             roadSplineSampler = FindAnyObjectByType<SplineSampler>();
 
+        if (railSplines == null || railSplines.Length == 0)
+            railSplines = FindObjectsByType<RailGrindSplineDreamteck>();
         facingYaw = transform.eulerAngles.y;
 
         Vector3 startForward = transform.forward;
@@ -338,6 +404,8 @@ public class HamsterBallController : MonoBehaviour
 
     private void FixedUpdate()
     {
+
+
         float dt = Time.fixedDeltaTime;
 
         jumpTimer -= dt;
@@ -347,9 +415,17 @@ public class HamsterBallController : MonoBehaviour
         dashTimer -= dt;
         dashCooldownTimer -= dt;
         chainRetargetLockoutTimer -= dt;
+        railSwitchCooldownTimer -= dt;
+        railRelockTimer -= dt;
 
         if (chainRetargetLockoutTimer < 0f)
             chainRetargetLockoutTimer = 0f;
+
+        if (railSwitchCooldownTimer < 0f)
+            railSwitchCooldownTimer = 0f;
+
+        if (railRelockTimer < 0f)
+            railRelockTimer = 0f;
 
         CheckRespawn();
 
@@ -367,8 +443,18 @@ public class HamsterBallController : MonoBehaviour
 
         RefreshRoadAttachment();
 
+        if (isRailGrinding)
+        {
+            UpdateRailGrinding(dt);
+            jumpPressed = false;
+            dashPressed = false;
+            attackPressed = false;
+            return;
+        }
+
         HandleFreeDash();
         HandleTargetAttack();
+        TryAutoCatchRail();
 
         ApplyDrive(dt);
         ApplyDirectionalGrip(dt);
@@ -424,6 +510,11 @@ public class HamsterBallController : MonoBehaviour
         isInChainHitStop = false;
         chainRetargetLockoutTimer = 0f;
         hasRoadAttachmentThisFrame = false;
+
+        isRailGrinding = false;
+        activeRailSpline = null;
+        currentRailSpeed = 0f;
+        railSwitchCooldownTimer = 0f;
 
         Vector3 targetPos = respawnPoint != null ? respawnPoint.position : Vector3.zero;
         Quaternion targetRot = respawnPoint != null ? respawnPoint.rotation : Quaternion.identity;
@@ -490,7 +581,7 @@ public class HamsterBallController : MonoBehaviour
 
     private void UpdateFacingFromMovement()
     {
-        if (isChainDashing || isInChainHitStop)
+        if (isChainDashing || isInChainHitStop || isRailGrinding)
             return;
 
         Vector3 horizontal = GetHorizontalVelocity();
@@ -531,20 +622,55 @@ public class HamsterBallController : MonoBehaviour
 
     private void HandleTargetAttack()
     {
-        if (!attackPressed || IsDashing)
+        if (!attackPressed || IsDashing || railRelockTimer > 0f)
             return;
 
-        ChainDashTarget target = FindBestChainTarget();
-        if (target == null)
-            return;
+        Vector3 aimForward = GetAttackAimForward();
 
-        StartChainDash(target);
+        ChainDashTarget chainTarget = FindBestChainTargetFromDirection(aimForward);
+
+        RailGrindSplineDreamteck railSpline = null;
+        RailGrindSplineDreamteck.RailSample railSample = default;
+        float bestRailScore = float.NegativeInfinity;
+
+        TryFindBestRailTarget(
+            transform.position,
+            aimForward,
+            out railSpline,
+            out railSample,
+            out bestRailScore
+        );
+
+        float chainScore = chainTarget != null ? ScoreChainTarget(chainTarget, aimForward) : float.NegativeInfinity;
+
+        if (railSpline != null && bestRailScore > chainScore)
+        {
+            StartRailGrind(railSpline, railSample);
+            return;
+        }
+
+        if (chainTarget != null)
+            StartChainDash(chainTarget);
+    }
+
+    private Vector3 GetAttackAimForward()
+    {
+        Vector3 facing = GetForwardFromFacing();
+
+        if (gameplayInput != null)
+            return gameplayInput.GetClampedAimDirection(facing);
+
+        return facing;
     }
 
     private ChainDashTarget FindBestChainTarget()
     {
+        return FindBestChainTargetFromDirection(GetForwardFromFacing());
+    }
+
+    private ChainDashTarget FindBestChainTargetFromDirection(Vector3 aimForward)
+    {
         Vector3 origin = transform.position;
-        Vector3 aimForward = GetForwardFromFacing();
 
         Collider[] hits = Physics.OverlapSphere(
             origin,
@@ -586,6 +712,374 @@ public class HamsterBallController : MonoBehaviour
         }
 
         return bestTarget;
+    }
+
+    private float ScoreChainTarget(ChainDashTarget target, Vector3 aimForward)
+    {
+        if (target == null)
+            return float.NegativeInfinity;
+
+        Vector3 origin = transform.position;
+        Vector3 toTarget = target.GetAimPosition() - origin;
+        float distance = toTarget.magnitude;
+
+        if (distance <= 0.001f)
+            return float.NegativeInfinity;
+
+        Vector3 dir = toTarget / distance;
+        float angle = Vector3.Angle(aimForward, dir);
+
+        if (angle > chainTargetMaxAngle)
+            return float.NegativeInfinity;
+
+        float angleScore = 1f - (angle / chainTargetMaxAngle);
+        float distanceScore = 1f - Mathf.Clamp01(distance / chainTargetSearchRadius);
+        return angleScore * 3f + distanceScore;
+    }
+
+    private bool TryFindBestRailTarget(
+    Vector3 origin,
+    Vector3 aimForward,
+    out RailGrindSplineDreamteck bestSpline,
+    out RailGrindSplineDreamteck.RailSample bestSample,
+    out float bestScore)
+    {
+        bestSpline = null;
+        bestSample = default;
+        bestScore = float.NegativeInfinity;
+
+        if (railSplines == null || railSplines.Length == 0)
+            return false;
+
+        bool found = false;
+
+        for (int i = 0; i < railSplines.Length; i++)
+        {
+            RailGrindSplineDreamteck rail = railSplines[i];
+            if (rail == null)
+                continue;
+
+            if (rail.TryFindStartAttackTarget(
+                    origin,
+                    aimForward,
+                    out RailGrindSplineDreamteck.RailSample sample,
+                    out float score))
+            {
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    bestSpline = rail;
+                    bestSample = sample;
+                    found = true;
+                }
+            }
+        }
+
+        return found;
+    }
+
+    private void TryAutoCatchRail()
+    {
+        if (isRailGrinding || IsDashing || isChainDashing || isInChainHitStop || railRelockTimer > 0f)
+            return;
+
+        if (attackPressed)
+            return;
+
+        if (railSplines == null || railSplines.Length == 0)
+            return;
+
+        float bestDistance = float.PositiveInfinity;
+        RailGrindSplineDreamteck bestRail = null;
+        RailGrindSplineDreamteck.RailSample bestSample = default;
+
+        for (int i = 0; i < railSplines.Length; i++)
+        {
+            RailGrindSplineDreamteck rail = railSplines[i];
+            if (rail == null)
+                continue;
+
+            if (!rail.TryGetProximityCatch(transform.position, out RailGrindSplineDreamteck.RailSample sample))
+                continue;
+
+            if (sample.distance < bestDistance)
+            {
+                bestDistance = sample.distance;
+                bestRail = rail;
+                bestSample = sample;
+            }
+        }
+
+        if (bestRail != null)
+            StartRailGrind(bestRail, bestSample);
+    }
+
+    private void StartRailGrind(RailGrindSplineDreamteck railSpline, RailGrindSplineDreamteck.RailSample sample)
+    {
+        if (railSpline == null)
+            return;
+
+        activeRailSpline = railSpline;
+        activeRailSample = sample;
+        isRailGrinding = true;
+        isChainDashing = false;
+        isInChainHitStop = false;
+        dashTimer = 0f;
+        dashCooldownTimer = dashCooldown;
+
+        Vector3 currentHorizontal = GetHorizontalVelocity();
+        float entrySpeed = currentHorizontal.magnitude;
+
+        float dot = Vector3.Dot(currentHorizontal, sample.forward);
+        railTravelDirection = dot < 0f ? -1f : 1f;
+
+        currentRailSpeed = Mathf.Max(railSnapSpeed, entrySpeed);
+
+        rb.angularVelocity = Vector3.zero;
+
+        float hoverOffset = GetRailHoverOffset(railSpline);
+        Vector3 snapPos = sample.point + sample.up * hoverOffset; rb.position = snapPos;
+        rb.linearVelocity = sample.forward * railTravelDirection * currentRailSpeed;
+
+        Vector3 railForward = sample.forward * railTravelDirection;
+        if (railForward.sqrMagnitude < 0.001f)
+            railForward = GetForwardFromFacing();
+
+        railForward.Normalize();
+
+        Quaternion railRotation = Quaternion.LookRotation(railForward, sample.up);
+
+        if (rotateRootToRail)
+        {
+            rb.rotation = railRotation;
+        }
+        else
+        {
+            Vector3 flatForward = railForward;
+            flatForward.y = 0f;
+
+            if (flatForward.sqrMagnitude < 0.001f)
+                flatForward = GetForwardFromFacing();
+
+            flatForward.Normalize();
+            facingYaw = Mathf.Atan2(flatForward.x, flatForward.z) * Mathf.Rad2Deg;
+        }
+
+        groundedTimer = 0f;
+        stickGraceTimer = 0f;
+        jumpDetachTimer = 0f;
+        isGrounded = false;
+        hasRoadAttachmentThisFrame = false;
+
+        TriggerSharedSpeedCameraKick();
+    }
+
+    private void UpdateRailGrinding(float dt)
+    {
+        if (activeRailSpline == null)
+        {
+            ExitRailGrind(false);
+            return;
+        }
+
+        if (jumpPressed)
+        {
+            ExitRailGrind(true);
+            return;
+        }
+
+        currentRailSpeed = Mathf.MoveTowards(
+            currentRailSpeed,
+            railGrindSpeed,
+            railGrindAcceleration * dt
+        );
+
+        Spline.Direction direction = railTravelDirection >= 0f
+            ? Spline.Direction.Forward
+            : Spline.Direction.Backward;
+
+        if (!activeRailSpline.Travel(
+                activeRailSample.percent,
+                currentRailSpeed * dt,
+                direction,
+                out activeRailSample))
+        {
+            ExitRailGrind(false);
+            return;
+        }
+
+        if (!activeRailSpline.IsClosed())
+        {
+            if (activeRailSample.percent <= 0.0001 || activeRailSample.percent >= 0.9999)
+            {
+                ExitRailGrind(false);
+                return;
+            }
+        }
+
+        TrySwitchRail();
+
+        Vector3 railForward = activeRailSample.forward * railTravelDirection;
+        if (railForward.sqrMagnitude < 0.0001f)
+            railForward = GetForwardFromFacing();
+
+        railForward.Normalize();
+
+        float hoverOffset = GetRailHoverOffset(activeRailSpline);
+        Vector3 desiredPos = activeRailSample.point + activeRailSample.up * hoverOffset;
+        Vector3 correction = desiredPos - rb.position;
+
+        rb.linearVelocity = railForward * currentRailSpeed + correction * railStickStrength;
+        rb.MovePosition(Vector3.Lerp(rb.position, desiredPos, Mathf.Clamp01(railAlignSpeed * dt)));
+
+        rb.angularVelocity = Vector3.zero;
+
+        if (rotateRootToRail)
+        {
+            Quaternion targetRotation = Quaternion.LookRotation(railForward, activeRailSample.up);
+            Quaternion smoothedRotation = Quaternion.Slerp(
+                rb.rotation,
+                targetRotation,
+                Mathf.Clamp01(railRootRotationSpeed * dt)
+            );
+
+            rb.MoveRotation(smoothedRotation);
+        }
+        else
+        {
+            Vector3 flatForward = railForward;
+            flatForward.y = 0f;
+
+            if (flatForward.sqrMagnitude < 0.0001f)
+                flatForward = GetForwardFromFacing();
+
+            flatForward.Normalize();
+            facingYaw = Mathf.Atan2(flatForward.x, flatForward.z) * Mathf.Rad2Deg;
+        }
+
+        lastGroundNormal = activeRailSample.up;
+        groundedTimer = 0f;
+        stickGraceTimer = 0f;
+        isGrounded = false;
+        hasRoadAttachmentThisFrame = false;
+    }
+
+    private void TrySwitchRail()
+    {
+        if (railSwitchCooldownTimer > 0f || activeRailSpline == null)
+            return;
+
+        float sideInput = steerInput;
+        if (Mathf.Abs(sideInput) < railSwitchInputThreshold)
+            return;
+
+        float desiredSide = Mathf.Sign(sideInput);
+
+        RailGrindSplineDreamteck bestRail = null;
+        RailGrindSplineDreamteck.RailSample bestSample = default;
+        float bestDistance = float.PositiveInfinity;
+
+        for (int i = 0; i < railSplines.Length; i++)
+        {
+            RailGrindSplineDreamteck rail = railSplines[i];
+            if (rail == null || rail == activeRailSpline)
+                continue;
+
+            if (!rail.TryFindSwitchTarget(
+                    activeRailSample,
+                    rb.position,
+                    desiredSide,
+                    railSwitchDistance,
+                    out RailGrindSplineDreamteck.RailSample switchedSample))
+            {
+                continue;
+            }
+
+            if (switchedSample.distance < bestDistance)
+            {
+                bestDistance = switchedSample.distance;
+                bestRail = rail;
+                bestSample = switchedSample;
+            }
+        }
+
+        if (bestRail != null)
+        {
+            float dirDot = Vector3.Dot(
+                activeRailSample.forward * railTravelDirection,
+                bestSample.forward
+            );
+
+            railTravelDirection = dirDot < 0f ? -1f : 1f;
+            activeRailSpline = bestRail;
+            activeRailSample = bestSample;
+            railSwitchCooldownTimer = railSwitchCooldown;
+        }
+    }
+
+    private void ExitRailGrind(bool jumpedOff)
+    {
+        if (!isRailGrinding)
+            return;
+
+        Vector3 launchForward = activeRailSample.forward * railTravelDirection;
+
+        if (launchForward.sqrMagnitude < 0.0001f)
+            launchForward = GetForwardFromFacing();
+
+        launchForward.Normalize();
+
+        isRailGrinding = false;
+
+        Vector3 exitVelocity = launchForward * currentRailSpeed;
+
+        bool shouldStartRelock = false;
+
+        if (jumpedOff)
+        {
+            Vector3 railUp = activeRailSample.up.normalized;
+
+            // Remove any velocity pushing into/down away from the rail's jump-up direction.
+            float velocityAlongRailUp = Vector3.Dot(exitVelocity, railUp);
+            if (velocityAlongRailUp < 0f)
+                exitVelocity -= railUp * velocityAlongRailUp;
+
+            exitVelocity += launchForward * railJumpForwardBoost;
+            exitVelocity += railUp * railJumpUpBoost;
+
+            // Guarantee a minimum launch away from the rail.
+            float finalRailUpSpeed = Vector3.Dot(exitVelocity, railUp);
+            if (finalRailUpSpeed < railJumpUpBoost)
+                exitVelocity += railUp * (railJumpUpBoost - finalRailUpSpeed);
+
+            jumpTimer = jumpCooldown;
+            jumpDetachTimer = jumpDetachTime;
+
+            if (disableRailRelockAfterJump)
+                shouldStartRelock = true;
+        }
+        else
+        {
+            if (disableRailRelockAfterRailEnd)
+                shouldStartRelock = true;
+        }
+
+        Vector3 exitPosition = rb.position + activeRailSample.up * railExitSeparation;
+        rb.position = exitPosition;
+
+        rb.linearVelocity = exitVelocity;
+        rb.angularVelocity = Vector3.zero;
+
+        groundedTimer = 0f;
+        stickGraceTimer = 0f;
+        isGrounded = false;
+        hasRoadAttachmentThisFrame = false;
+
+        activeRailSpline = null;
+        currentRailSpeed = 0f;
+
+        if (shouldStartRelock)
+            railRelockTimer = Mathf.Max(railRelockTimer, railRelockCooldown);
     }
 
     private void UpdateChainTargetPreview()
@@ -760,7 +1254,7 @@ public class HamsterBallController : MonoBehaviour
         if (!useRoadAttachment || roadSplineSampler == null)
             return;
 
-        if (jumpDetachTimer > 0f || isChainDashing || isInChainHitStop)
+        if (jumpDetachTimer > 0f || isChainDashing || isInChainHitStop || isRailGrinding)
             return;
 
         if (!roadSplineSampler.TryFindClosestRoadSample(
@@ -927,7 +1421,7 @@ public class HamsterBallController : MonoBehaviour
 
     private void ApplyDirectionalGrip(float dt)
     {
-        if (isChainDashing || isInChainHitStop)
+        if (isChainDashing || isInChainHitStop || isRailGrinding)
             return;
 
         Vector3 horizontal = GetHorizontalVelocity();
@@ -952,7 +1446,7 @@ public class HamsterBallController : MonoBehaviour
         if (hasRoadAttachmentThisFrame)
             return;
 
-        if (jumpDetachTimer > 0f || isInChainHitStop)
+        if (jumpDetachTimer > 0f || isInChainHitStop || isRailGrinding)
             return;
 
         bool shouldStick = isGrounded || stickGraceTimer > 0f;
@@ -970,7 +1464,7 @@ public class HamsterBallController : MonoBehaviour
 
     private void ApplyJumpGravity()
     {
-        if (isGrounded || isInChainHitStop)
+        if (isGrounded || isInChainHitStop || isRailGrinding)
             return;
 
         float gravityToApply = rb.linearVelocity.y > 0f ? RiseGravity : FallGravity;
@@ -979,6 +1473,9 @@ public class HamsterBallController : MonoBehaviour
 
     private void HandleJump()
     {
+        if (isRailGrinding)
+            return;
+
         if (!jumpPressed || !isGrounded || jumpTimer > 0f || isInChainHitStop)
             return;
 
@@ -1014,7 +1511,18 @@ public class HamsterBallController : MonoBehaviour
 
         Vector3 targetForward;
 
-        if (horizontalSpeed > minVisualSpeedForFacing)
+        if (isRailGrinding)
+        {
+            Vector3 grindForward = activeRailSample.forward * railTravelDirection;
+            grindForward.y = 0f;
+
+            if (grindForward.sqrMagnitude < 0.001f)
+                grindForward = GetForwardFromFacing();
+
+            targetForward = grindForward.normalized;
+            lastStableMoveDirection = targetForward;
+        }
+        else if (horizontalSpeed > minVisualSpeedForFacing)
         {
             targetForward = horizontalVelocity.normalized;
             lastStableMoveDirection = targetForward;
@@ -1037,12 +1545,26 @@ public class HamsterBallController : MonoBehaviour
         ).normalized;
 
         float leanAmount = 0f;
-        if ((!IsDashing || !lockSteeringDuringDash) && !isChainDashing && !isInChainHitStop)
+        if ((!IsDashing || !lockSteeringDuringDash) && !isChainDashing && !isInChainHitStop && !isRailGrinding)
             leanAmount = -steerInput * visualTurnLean;
 
-        Quaternion facingRotation = Quaternion.LookRotation(smoothedVisualForward, Vector3.up);
-        Quaternion leanRotation = Quaternion.AngleAxis(leanAmount, Vector3.forward);
+        Quaternion facingRotation;
 
+        if (isRailGrinding)
+        {
+            Vector3 railForward = activeRailSample.forward * railTravelDirection;
+            if (railForward.sqrMagnitude < 0.001f)
+                railForward = smoothedVisualForward;
+
+            railForward.Normalize();
+            facingRotation = Quaternion.LookRotation(railForward, activeRailSample.up);
+        }
+        else
+        {
+            facingRotation = Quaternion.LookRotation(smoothedVisualForward, Vector3.up);
+        }
+
+        Quaternion leanRotation = Quaternion.AngleAxis(leanAmount, Vector3.forward);
         visualRoot.rotation = facingRotation * leanRotation;
     }
 
@@ -1058,6 +1580,9 @@ public class HamsterBallController : MonoBehaviour
 
     private void EvaluateCollision(Collision collision)
     {
+        if (isRailGrinding)
+            return;
+
         for (int i = 0; i < collision.contactCount; i++)
         {
             Vector3 normal = collision.GetContact(i).normal;
@@ -1170,5 +1695,25 @@ public class HamsterBallController : MonoBehaviour
         style.normal.textColor = Color.white;
 
         GUI.Label(new Rect(20, 20, 320, 30), $"Speed: {speed:F1}", style);
+
+        if (isRailGrinding)
+            GUI.Label(new Rect(20, 45, 320, 30), $"Grinding: YES", style);
+    }
+
+    private float GetRailHoverOffset(RailGrindSplineDreamteck rail)
+    {
+        if (rail == null)
+            return 0f;
+
+        float hover = rail.grindHoverHeight;
+
+        if (rail.includePlayerRadiusInHover && sphereCol != null)
+        {
+            float maxScale = Mathf.Max(transform.lossyScale.x, transform.lossyScale.y, transform.lossyScale.z);
+            hover += sphereCol.radius * maxScale;
+        }
+
+        hover += rail.extraHoverClearance;
+        return hover;
     }
 }
