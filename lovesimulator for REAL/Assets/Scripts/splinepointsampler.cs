@@ -26,6 +26,17 @@ public class SplinePointSampler : MonoBehaviour
     [SerializeField] private float junctionCenterLift = 0.01f;
     [SerializeField] private int minimumEndpointsForJunction = 3;
 
+    [System.Serializable]
+    public struct ClosestJunctionSample
+    {
+        public int junctionIndex;
+        public Vector3 point;
+        public Vector3 up;
+        public Vector3 forward;
+        public Vector3 right;
+        public float distance;
+    }
+
     [Header("Debug Intersection Mesh")]
     [SerializeField] private bool showGreenIntersectionDebugMesh = true;
     [SerializeField] private Material greenIntersectionDebugMaterial;
@@ -734,5 +745,160 @@ public class SplinePointSampler : MonoBehaviour
     private static bool IsFinite(Vector3 v)
     {
         return float.IsFinite(v.x) && float.IsFinite(v.y) && float.IsFinite(v.z);
+    }
+
+    public bool TryFindClosestJunctionSample(Vector3 worldPos, out ClosestJunctionSample sample)
+    {
+        sample = default;
+
+        if (m_junctions == null || m_junctions.Count == 0)
+            return false;
+
+        bool found = false;
+        float bestDistSqr = float.PositiveInfinity;
+
+        for (int i = 0; i < m_junctions.Count; i++)
+        {
+            RoadJunction junction = m_junctions[i];
+            if (junction == null || junction.endpoints == null || junction.endpoints.Count < minimumEndpointsForJunction)
+                continue;
+
+            Vector3 closestPoint = GetClosestPointOnJunctionSurface(junction, worldPos, out Vector3 up, out Vector3 forward, out Vector3 right);
+            float distSqr = (worldPos - closestPoint).sqrMagnitude;
+
+            if (distSqr < bestDistSqr)
+            {
+                bestDistSqr = distSqr;
+                found = true;
+
+                sample = new ClosestJunctionSample
+                {
+                    junctionIndex = i,
+                    point = closestPoint,
+                    up = up,
+                    forward = forward,
+                    right = right,
+                    distance = Mathf.Sqrt(distSqr)
+                };
+            }
+        }
+
+        return found;
+    }
+
+    private Vector3 GetClosestPointOnJunctionSurface(RoadJunction junction, Vector3 worldPos, out Vector3 up, out Vector3 forward, out Vector3 right)
+    {
+        up = junction.averageUp.sqrMagnitude > 0.000001f ? junction.averageUp.normalized : Vector3.up;
+
+        List<Vector3> ringPoints = new();
+        GetJunctionRingWorldPoints(junction, ringPoints);
+
+        if (ringPoints.Count < 3)
+        {
+            forward = Vector3.forward;
+            right = Vector3.right;
+            return junction.center;
+        }
+
+        Vector3 planePoint = junction.center;
+        Vector3 projected = ProjectPointOntoPlane(worldPos, planePoint, up);
+
+        bool inside = IsPointInsideConvexPolygon(projected, ringPoints, up);
+
+        Vector3 closest;
+        if (inside)
+        {
+            closest = projected;
+        }
+        else
+        {
+            closest = GetClosestPointOnPolygonEdges(projected, ringPoints);
+        }
+
+        Vector3 toPoint = closest - junction.center;
+        toPoint = Vector3.ProjectOnPlane(toPoint, up);
+
+        if (toPoint.sqrMagnitude < 0.000001f)
+            forward = junction.endpoints.Count > 0 ? junction.endpoints[0].OutwardDirection.normalized : Vector3.forward;
+        else
+            forward = toPoint.normalized;
+
+        right = Vector3.Cross(forward, up).normalized;
+        if (right.sqrMagnitude < 0.000001f)
+            right = Vector3.right;
+
+        forward = Vector3.Cross(up, right).normalized;
+        if (forward.sqrMagnitude < 0.000001f)
+            forward = Vector3.forward;
+
+        return closest;
+    }
+
+    private static Vector3 ProjectPointOntoPlane(Vector3 point, Vector3 planePoint, Vector3 planeNormal)
+    {
+        float d = Vector3.Dot(point - planePoint, planeNormal);
+        return point - planeNormal * d;
+    }
+
+    private static Vector3 GetClosestPointOnPolygonEdges(Vector3 point, List<Vector3> polygon)
+    {
+        Vector3 best = polygon[0];
+        float bestDistSqr = float.PositiveInfinity;
+
+        for (int i = 0; i < polygon.Count; i++)
+        {
+            Vector3 a = polygon[i];
+            Vector3 b = polygon[(i + 1) % polygon.Count];
+            Vector3 candidate = ClosestPointOnSegment(point, a, b);
+
+            float distSqr = (point - candidate).sqrMagnitude;
+            if (distSqr < bestDistSqr)
+            {
+                bestDistSqr = distSqr;
+                best = candidate;
+            }
+        }
+
+        return best;
+    }
+
+    private static Vector3 ClosestPointOnSegment(Vector3 point, Vector3 a, Vector3 b)
+    {
+        Vector3 ab = b - a;
+        float abSqr = ab.sqrMagnitude;
+
+        if (abSqr <= 0.000001f)
+            return a;
+
+        float t = Mathf.Clamp01(Vector3.Dot(point - a, ab) / abSqr);
+        return a + ab * t;
+    }
+
+    private static bool IsPointInsideConvexPolygon(Vector3 point, List<Vector3> polygon, Vector3 up)
+    {
+        if (polygon == null || polygon.Count < 3)
+            return false;
+
+        float lastSign = 0f;
+
+        for (int i = 0; i < polygon.Count; i++)
+        {
+            Vector3 a = polygon[i];
+            Vector3 b = polygon[(i + 1) % polygon.Count];
+            Vector3 edge = b - a;
+            Vector3 toPoint = point - a;
+
+            float sign = Vector3.Dot(Vector3.Cross(edge, toPoint), up);
+
+            if (Mathf.Abs(sign) < 0.00001f)
+                continue;
+
+            if (lastSign == 0f)
+                lastSign = Mathf.Sign(sign);
+            else if (Mathf.Sign(sign) != Mathf.Sign(lastSign))
+                return false;
+        }
+
+        return true;
     }
 }

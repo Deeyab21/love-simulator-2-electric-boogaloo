@@ -26,6 +26,9 @@ public class HamsterBallController : MonoBehaviour
     [Tooltip("Input reader for move / jump / dash / attack.")]
     public PlayerGameplayInput gameplayInput;
 
+    [Tooltip("Spline sampler used as the source of truth for road attachment.")]
+    public SplineSampler roadSplineSampler;
+
     [Header("Forward Movement")]
     [Tooltip("How strongly the player is pushed forward every physics step.")]
     public float forwardAcceleration = 30f;
@@ -194,6 +197,31 @@ public class HamsterBallController : MonoBehaviour
     [Tooltip("Maximum upward-away speed that ground stick is allowed to cancel.")]
     public float maxStickAwaySpeed = 6f;
 
+    [Header("Road Attachment")]
+    [Tooltip("If true, the spline road is used to keep the player attached during normal running.")]
+    public bool useRoadAttachment = true;
+
+    [Tooltip("How many spline segments are checked when finding the nearest road sample.")]
+    public int roadAttachmentSearchResolution = 28;
+
+    [Tooltip("How close the player must be to the road before road attachment can activate.")]
+    public float roadAttachmentCatchDistance = 2.25f;
+
+    [Tooltip("Small hover offset above the road while attached.")]
+    public float roadAttachmentHoverOffset = 0.03f;
+
+    [Tooltip("Keeps the player slightly inside the road edge instead of exactly on the outermost width.")]
+    public float roadAttachmentWidthPadding = 0.15f;
+
+    [Tooltip("How quickly the player is moved back onto the road along the road normal.")]
+    public float roadAttachmentSnapSpeed = 45f;
+
+    [Tooltip("If the player is moving away from the road faster than this, attachment waits.")]
+    public float roadAttachmentMaxCatchAwaySpeed = 2.5f;
+
+    [Tooltip("Maximum speed allowed into the road while attached.")]
+    public float roadAttachmentMaxIntoRoadSpeed = 8f;
+
     [Header("Visuals")]
     [Tooltip("Vertical offset for the visual model.")]
     public float rideHeight = 0.9f;
@@ -242,6 +270,11 @@ public class HamsterBallController : MonoBehaviour
     private Coroutine chainHitRoutine;
     private float chainRetargetLockoutTimer;
 
+    private bool hasRoadAttachmentThisFrame;
+    private Vector3 roadAttachmentTargetPosition;
+    private Vector3 roadAttachmentUp = Vector3.up;
+    private Vector3 roadAttachmentForward = Vector3.forward;
+
     private float JumpLaunchSpeed => (2f * jumpHeight) / Mathf.Max(0.01f, timeToApex);
     private float RiseGravity => (2f * jumpHeight) / Mathf.Max(0.01f, timeToApex * timeToApex);
     private float FallGravity => (2f * jumpHeight) / Mathf.Max(0.01f, timeToDescend * timeToDescend);
@@ -264,6 +297,9 @@ public class HamsterBallController : MonoBehaviour
 
         if (gameplayInput == null)
             gameplayInput = GetComponent<PlayerGameplayInput>();
+
+        if (roadSplineSampler == null)
+            roadSplineSampler = FindAnyObjectByType<SplineSampler>();
 
         facingYaw = transform.eulerAngles.y;
 
@@ -326,13 +362,17 @@ public class HamsterBallController : MonoBehaviour
             return;
         }
 
+        hasRoadAttachmentThisFrame = false;
         isGrounded = groundedTimer > 0f;
+
+        RefreshRoadAttachment();
 
         HandleFreeDash();
         HandleTargetAttack();
 
         ApplyDrive(dt);
         ApplyDirectionalGrip(dt);
+        ApplyRoadAttachment(dt);
         UpdateFacingFromMovement();
         ApplyGroundStick();
         ApplyJumpGravity();
@@ -342,7 +382,7 @@ public class HamsterBallController : MonoBehaviour
         dashPressed = false;
         attackPressed = false;
 
-        if (groundedTimer <= 0f)
+        if (groundedTimer <= 0f && !hasRoadAttachmentThisFrame)
             isGrounded = false;
 
         boostTimer -= dt;
@@ -383,6 +423,7 @@ public class HamsterBallController : MonoBehaviour
         isChainDashing = false;
         isInChainHitStop = false;
         chainRetargetLockoutTimer = 0f;
+        hasRoadAttachmentThisFrame = false;
 
         Vector3 targetPos = respawnPoint != null ? respawnPoint.position : Vector3.zero;
         Quaternion targetRot = respawnPoint != null ? respawnPoint.rotation : Quaternion.identity;
@@ -674,6 +715,7 @@ public class HamsterBallController : MonoBehaviour
         groundedTimer = 0f;
         stickGraceTimer = 0f;
         isGrounded = false;
+        hasRoadAttachmentThisFrame = false;
 
         activeChainTarget = null;
         lockedChainTarget = null;
@@ -709,6 +751,78 @@ public class HamsterBallController : MonoBehaviour
             loveMeter.SetLove(0f);
         else
             loveMeter.TrySpendLove(dashLoveCost);
+    }
+
+    private void RefreshRoadAttachment()
+    {
+        hasRoadAttachmentThisFrame = false;
+
+        if (!useRoadAttachment || roadSplineSampler == null)
+            return;
+
+        if (jumpDetachTimer > 0f || isChainDashing || isInChainHitStop)
+            return;
+
+        if (!roadSplineSampler.TryFindClosestRoadSample(
+                rb.position,
+                roadAttachmentSearchResolution,
+                out SplineSampler.ClosestRoadSample sample))
+        {
+            return;
+        }
+
+        float usableHalfWidth = Mathf.Max(0.05f, roadSplineSampler.Width - roadAttachmentWidthPadding);
+
+        Vector3 toPlayer = rb.position - sample.center;
+        float lateral = Vector3.Dot(toPlayer, sample.right);
+        float clampedLateral = Mathf.Clamp(lateral, -usableHalfWidth, usableHalfWidth);
+
+        Vector3 desiredRoadPoint =
+            sample.center +
+            sample.right * clampedLateral +
+            sample.up * roadAttachmentHoverOffset;
+
+        float distanceToDesired = Vector3.Distance(rb.position, desiredRoadPoint);
+        float awaySpeed = Vector3.Dot(rb.linearVelocity, sample.up);
+        float heightAboveRoad = Vector3.Dot(rb.position - desiredRoadPoint, sample.up);
+
+        if (distanceToDesired > roadAttachmentCatchDistance)
+            return;
+
+        if (heightAboveRoad > 0f && awaySpeed > roadAttachmentMaxCatchAwaySpeed)
+            return;
+
+        hasRoadAttachmentThisFrame = true;
+        roadAttachmentTargetPosition = desiredRoadPoint;
+        roadAttachmentUp = sample.up.normalized;
+        roadAttachmentForward = sample.forward.normalized;
+
+        lastGroundNormal = roadAttachmentUp;
+        groundedTimer = Mathf.Max(groundedTimer, groundedMemory);
+        stickGraceTimer = Mathf.Max(stickGraceTimer, groundStickGraceTime);
+        isGrounded = true;
+    }
+
+    private void ApplyRoadAttachment(float dt)
+    {
+        if (!hasRoadAttachmentThisFrame)
+            return;
+
+        Vector3 correction = Vector3.Project(roadAttachmentTargetPosition - rb.position, roadAttachmentUp);
+
+        float maxStep = roadAttachmentSnapSpeed * dt;
+        if (correction.magnitude > maxStep)
+            correction = correction.normalized * maxStep;
+
+        rb.MovePosition(rb.position + correction);
+
+        float awaySpeed = Vector3.Dot(rb.linearVelocity, roadAttachmentUp);
+        if (awaySpeed > 0f)
+            rb.linearVelocity -= roadAttachmentUp * awaySpeed;
+
+        float intoRoadSpeed = Vector3.Dot(rb.linearVelocity, -roadAttachmentUp);
+        if (intoRoadSpeed > roadAttachmentMaxIntoRoadSpeed)
+            rb.linearVelocity += roadAttachmentUp * (intoRoadSpeed - roadAttachmentMaxIntoRoadSpeed);
     }
 
     private void ApplyDrive(float dt)
@@ -835,6 +949,9 @@ public class HamsterBallController : MonoBehaviour
 
     private void ApplyGroundStick()
     {
+        if (hasRoadAttachmentThisFrame)
+            return;
+
         if (jumpDetachTimer > 0f || isInChainHitStop)
             return;
 
@@ -882,6 +999,7 @@ public class HamsterBallController : MonoBehaviour
         stickGraceTimer = 0f;
         jumpTimer = jumpCooldown;
         jumpDetachTimer = jumpDetachTime;
+        hasRoadAttachmentThisFrame = false;
     }
 
     private void UpdateVisuals()
@@ -889,7 +1007,6 @@ public class HamsterBallController : MonoBehaviour
         if (visualRoot == null)
             return;
 
-        // World position above the ball.
         visualRoot.position = transform.position + Vector3.up * rideHeight;
 
         Vector3 horizontalVelocity = GetHorizontalVelocity();

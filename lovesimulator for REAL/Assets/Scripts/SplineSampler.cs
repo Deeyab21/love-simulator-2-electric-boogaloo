@@ -30,6 +30,18 @@ public class SplineSampler : MonoBehaviour
 
     public float Width => m_width;
 
+    [System.Serializable]
+    public struct ClosestRoadSample
+    {
+        public int splineIndex;
+        public float t;
+        public Vector3 center;
+        public Vector3 forward;
+        public Vector3 up;
+        public Vector3 right;
+        public float distanceToCenterline;
+    }
+
     public bool IsValidSplineIndex(int splineIndex)
     {
         return m_splineContainer != null &&
@@ -103,6 +115,83 @@ public class SplineSampler : MonoBehaviour
         p2 = center - right * m_width;
 
         return IsFinite(p1) && IsFinite(p2);
+    }
+
+    public bool TryFindClosestRoadSample(Vector3 worldPos, int segmentResolution, out ClosestRoadSample sample)
+    {
+        sample = default;
+
+        if (m_splineContainer == null || m_splineContainer.Splines == null || m_splineContainer.Splines.Count == 0)
+            return false;
+
+        segmentResolution = Mathf.Max(4, segmentResolution);
+
+        bool found = false;
+        float bestDistSqr = float.PositiveInfinity;
+
+        for (int splineIndex = 0; splineIndex < NumSplines; splineIndex++)
+        {
+            float prevT = 0f;
+            if (!SampleCenter(splineIndex, prevT, out Vector3 prevCenter))
+                continue;
+
+            for (int i = 1; i <= segmentResolution; i++)
+            {
+                float nextT = (float)i / segmentResolution;
+
+                if (!SampleCenter(splineIndex, nextT, out Vector3 nextCenter))
+                {
+                    prevCenter = nextCenter;
+                    prevT = nextT;
+                    continue;
+                }
+
+                Vector3 closestPoint = ClosestPointOnSegment(worldPos, prevCenter, nextCenter, out float seg01);
+                float distSqr = (worldPos - closestPoint).sqrMagnitude;
+
+                if (distSqr < bestDistSqr)
+                {
+                    float bestT = Mathf.Lerp(prevT, nextT, seg01);
+
+                    if (SampleFrame(splineIndex, bestT, out Vector3 center, out Vector3 forward, out Vector3 up, out Vector3 right))
+                    {
+                        bestDistSqr = distSqr;
+                        found = true;
+
+                        sample = new ClosestRoadSample
+                        {
+                            splineIndex = splineIndex,
+                            t = bestT,
+                            center = center,
+                            forward = forward,
+                            up = up,
+                            right = right,
+                            distanceToCenterline = Mathf.Sqrt(distSqr)
+                        };
+                    }
+                }
+
+                prevCenter = nextCenter;
+                prevT = nextT;
+            }
+        }
+
+        return found;
+    }
+
+    private static Vector3 ClosestPointOnSegment(Vector3 point, Vector3 a, Vector3 b, out float t01)
+    {
+        Vector3 ab = b - a;
+        float abSqr = ab.sqrMagnitude;
+
+        if (abSqr <= 0.000001f)
+        {
+            t01 = 0f;
+            return a;
+        }
+
+        t01 = Mathf.Clamp01(Vector3.Dot(point - a, ab) / abSqr);
+        return a + ab * t01;
     }
 
     private void Update()
