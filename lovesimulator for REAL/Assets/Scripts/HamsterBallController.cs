@@ -136,8 +136,7 @@ public class HamsterBallController : MonoBehaviour
     [Tooltip("Speed used while being pulled toward a chain target.")]
     public float chainPullSpeed = 120f;
 
-    [Tooltip("How quickly facing updates while being pulled toward a chain target.")]
-    public float chainPullFacingSpeed = 18f;
+ 
 
     [Tooltip("If true, hitting a chain target refills the love meter.")]
     public bool refillLoveOnChainHit = true;
@@ -145,8 +144,7 @@ public class HamsterBallController : MonoBehaviour
     [Tooltip("If true, chain attack ignores the normal love requirement.")]
     public bool chainDashIgnoresLoveRequirement = true;
 
-    [Tooltip("Extra camera FOV kick when launched out of a chain target.")]
-    public float chainLaunchCameraKickAmount = 11f;
+   
 
     [Tooltip("Extra distance to push the player out of the target before the launch begins.")]
     public float chainLaunchExitPadding = 0.35f;
@@ -163,10 +161,6 @@ public class HamsterBallController : MonoBehaviour
 
     [Tooltip("How quickly the player root rotates to match the rail frame.")]
     public float railRootRotationSpeed = 20f;
-
-
-    [Tooltip("Maximum angle allowed when locking onto a rail.")]
-    [Range(1f, 180f)] public float railTargetMaxAngle = 55f;
 
     [Tooltip("Minimum speed when snapping onto a rail.")]
     public float railSnapSpeed = 40f;
@@ -198,6 +192,24 @@ public class HamsterBallController : MonoBehaviour
     [Tooltip("Minimum left/right input needed to try switching rails.")]
     public float railSwitchInputThreshold = 0.45f;
 
+    [Header("Rail Switch Debug")]
+    [Tooltip("If true, draws a sphere where the player would land when switching rails.")]
+    public bool drawRailSwitchDebug = true;
+
+    [Tooltip("Radius of the switch target debug sphere.")]
+    public float railSwitchDebugSphereRadius = 0.35f;
+
+    [Tooltip("Vertical lift for the switch target debug sphere.")]
+    public float railSwitchDebugLift = 0.25f;
+
+    [Tooltip("Invert left/right rail switching if controls feel backwards.")]
+    public bool invertRailSwitchInput = true;
+
+    [Header("Rail Switch Preview Object")]
+    public GameObject railSwitchPreviewPrefab;
+    public bool showRailSwitchPreviewObject = true;
+    public float railSwitchPreviewObjectLift = 0.25f;
+
     [Tooltip("Small push away from the rail when exiting so the player doesn't instantly sit back inside the catch zone.")]
     public float railExitSeparation = 0.4f;
 
@@ -213,28 +225,6 @@ public class HamsterBallController : MonoBehaviour
     [Header("Shared Speed Camera Kick")]
     [Tooltip("If true, dashes and boosts trigger the shared speed camera kick.")]
     public bool triggerSpeedCameraKick = true;
-
-    [Tooltip("Extra FOV added by the shared speed kick.")]
-    public float speedCameraKickAmount = 9f;
-
-    [Tooltip("How long the shared speed kick is held before relaxing.")]
-    public float speedCameraKickHoldTime = 0.22f;
-
-    [Tooltip("How quickly the shared speed kick ramps in.")]
-    public float speedCameraKickInSpeed = 14f;
-
-    [Tooltip("How quickly the shared speed kick ramps out.")]
-    public float speedCameraKickOutSpeed = 5f;
-
-    [Header("Temporary Speed Boost")]
-    [Tooltip("Temporary acceleration bonus applied by boost zones or other effects.")]
-    public float boostAccelerationBonus = 0f;
-
-    [Tooltip("Temporary max-speed bonus applied by boost zones or other effects.")]
-    public float boostMaxSpeedBonus = 0f;
-
-    [Tooltip("How long the current temporary boost remains active.")]
-    public float boostTimer = 0f;
 
     [Header("Grounding")]
     [Tooltip("Maximum walkable ground angle.")]
@@ -318,8 +308,6 @@ public class HamsterBallController : MonoBehaviour
     private Vector3 smoothedVisualForward = Vector3.forward;
     private Vector3 lastStableMoveDirection = Vector3.forward;
 
-    private ChainDashTarget lockedChainTarget;
-    private ChainDashTarget lastPreviewedChainTarget;
     private ChainDashTarget activeChainTarget;
     private bool isChainDashing;
     private bool isInChainHitStop;
@@ -338,6 +326,7 @@ public class HamsterBallController : MonoBehaviour
     private float currentRailSpeed = 0f;
     private float railSwitchCooldownTimer = 0f;
     private float railRelockTimer = 0f;
+    private GameObject railSwitchPreviewInstance;
 
     private float JumpLaunchSpeed => (2f * jumpHeight) / Mathf.Max(0.01f, timeToApex);
     private float RiseGravity => (2f * jumpHeight) / Mathf.Max(0.01f, timeToApex * timeToApex);
@@ -364,6 +353,8 @@ public class HamsterBallController : MonoBehaviour
 
         if (roadSplineSampler == null)
             roadSplineSampler = FindAnyObjectByType<SplineSampler>();
+
+      
 
         if (railSplines == null || railSplines.Length == 0)
             railSplines = FindObjectsByType<RailGrindSplineDreamteck>();
@@ -399,7 +390,6 @@ public class HamsterBallController : MonoBehaviour
             steerInput = 0f;
         }
 
-        UpdateChainTargetPreview();
     }
 
     private void FixedUpdate()
@@ -443,6 +433,7 @@ public class HamsterBallController : MonoBehaviour
 
         RefreshRoadAttachment();
 
+
         if (isRailGrinding)
         {
             UpdateRailGrinding(dt);
@@ -471,14 +462,6 @@ public class HamsterBallController : MonoBehaviour
         if (groundedTimer <= 0f && !hasRoadAttachmentThisFrame)
             isGrounded = false;
 
-        boostTimer -= dt;
-        if (boostTimer <= 0f)
-        {
-            boostTimer = 0f;
-            boostAccelerationBonus = 0f;
-            boostMaxSpeedBonus = 0f;
-        }
-
         if (dashTimer <= 0f)
             dashTimer = 0f;
 
@@ -486,9 +469,12 @@ public class HamsterBallController : MonoBehaviour
             dashCooldownTimer = 0f;
     }
 
+  
+
     private void LateUpdate()
     {
         UpdateVisuals();
+        UpdateRailSwitchPreviewObject();
     }
 
     private void CheckRespawn()
@@ -502,9 +488,7 @@ public class HamsterBallController : MonoBehaviour
             chainHitRoutine = null;
         }
 
-        ClearChainPreview();
 
-        lockedChainTarget = null;
         activeChainTarget = null;
         isChainDashing = false;
         isInChainHitStop = false;
@@ -830,8 +814,8 @@ public class HamsterBallController : MonoBehaviour
         Vector3 currentHorizontal = GetHorizontalVelocity();
         float entrySpeed = currentHorizontal.magnitude;
 
-        float dot = Vector3.Dot(currentHorizontal, sample.forward);
-        railTravelDirection = dot < 0f ? -1f : 1f;
+        // Rails are one-way only: head to tail / percent 0 -> 1.
+        railTravelDirection = 1f;
 
         currentRailSpeed = Mathf.Max(railSnapSpeed, entrySpeed);
 
@@ -888,10 +872,21 @@ public class HamsterBallController : MonoBehaviour
             return;
         }
 
+        TryStartRailDashBoost();
+
+        float targetRailSpeed = railGrindSpeed;
+        float railAcceleration = railGrindAcceleration;
+
+        if (dashTimer > 0f)
+        {
+            targetRailSpeed = Mathf.Max(targetRailSpeed, dashMaxSpeed);
+            railAcceleration += dashAcceleration;
+        }
+
         currentRailSpeed = Mathf.MoveTowards(
             currentRailSpeed,
-            railGrindSpeed,
-            railGrindAcceleration * dt
+            targetRailSpeed,
+            railAcceleration * dt
         );
 
         Spline.Direction direction = railTravelDirection >= 0f
@@ -918,7 +913,6 @@ public class HamsterBallController : MonoBehaviour
         }
 
         TrySwitchRail();
-
         Vector3 railForward = activeRailSample.forward * railTravelDirection;
         if (railForward.sqrMagnitude < 0.0001f)
             railForward = GetForwardFromFacing();
@@ -964,6 +958,30 @@ public class HamsterBallController : MonoBehaviour
         hasRoadAttachmentThisFrame = false;
     }
 
+    private void TryStartRailDashBoost()
+    {
+        if (!dashPressed)
+            return;
+
+        if (!isRailGrinding)
+            return;
+
+        if (dashCooldownTimer > 0f)
+            return;
+
+        if (!CanDash())
+            return;
+
+        SpendLoveForDash();
+
+        currentRailSpeed = Mathf.Max(currentRailSpeed, dashStartSpeed);
+
+        dashTimer = dashDuration;
+        dashCooldownTimer = dashCooldown;
+
+        TriggerSharedSpeedCameraKick();
+    }
+
     private void TrySwitchRail()
     {
         if (railSwitchCooldownTimer > 0f || activeRailSpline == null)
@@ -974,6 +992,9 @@ public class HamsterBallController : MonoBehaviour
             return;
 
         float desiredSide = Mathf.Sign(sideInput);
+
+        if (invertRailSwitchInput)
+            desiredSide *= -1f;
 
         RailGrindSplineDreamteck bestRail = null;
         RailGrindSplineDreamteck.RailSample bestSample = default;
@@ -1005,12 +1026,8 @@ public class HamsterBallController : MonoBehaviour
 
         if (bestRail != null)
         {
-            float dirDot = Vector3.Dot(
-                activeRailSample.forward * railTravelDirection,
-                bestSample.forward
-            );
+            railTravelDirection = 1f;
 
-            railTravelDirection = dirDot < 0f ? -1f : 1f;
             activeRailSpline = bestRail;
             activeRailSample = bestSample;
             railSwitchCooldownTimer = railSwitchCooldown;
@@ -1030,6 +1047,8 @@ public class HamsterBallController : MonoBehaviour
         launchForward.Normalize();
 
         isRailGrinding = false;
+        if (railSwitchPreviewInstance != null)
+            railSwitchPreviewInstance.SetActive(false);
 
         Vector3 exitVelocity = launchForward * currentRailSpeed;
 
@@ -1082,25 +1101,9 @@ public class HamsterBallController : MonoBehaviour
             railRelockTimer = Mathf.Max(railRelockTimer, railRelockCooldown);
     }
 
-    private void UpdateChainTargetPreview()
-    {
-        if (lastPreviewedChainTarget != null)
-        {
-            lastPreviewedChainTarget.SetPreviewed(false);
-            lastPreviewedChainTarget = null;
-        }
+    
 
-        lockedChainTarget = null;
-    }
-
-    private void ClearChainPreview()
-    {
-        if (lastPreviewedChainTarget != null)
-        {
-            lastPreviewedChainTarget.SetPreviewed(false);
-            lastPreviewedChainTarget = null;
-        }
-    }
+    
 
     private void StartChainDash(ChainDashTarget target)
     {
@@ -1119,8 +1122,6 @@ public class HamsterBallController : MonoBehaviour
         dashTimer = 0f;
         dashCooldownTimer = dashCooldown;
 
-        ClearChainPreview();
-        lockedChainTarget = null;
 
         Vector3 toAim = target.GetAimPosition() - transform.position;
         Vector3 pullDir = toAim.normalized;
@@ -1129,7 +1130,15 @@ public class HamsterBallController : MonoBehaviour
             pullDir = GetForwardFromFacing();
 
         rb.linearVelocity = pullDir * chainPullSpeed;
-        TriggerSharedSpeedCameraKick();
+
+        if (followCamera != null)
+            followCamera.PlayAttackAttachCameraJuice();
+
+        if (followCamera != null)
+        {
+            followCamera.TriggerFovKick(14f, 0.08f, 22f, 9f);
+            followCamera.TriggerShake(0.08f, 0.08f);
+        }
     }
 
     private void ResolveChainDashHit()
@@ -1212,17 +1221,18 @@ public class HamsterBallController : MonoBehaviour
         hasRoadAttachmentThisFrame = false;
 
         activeChainTarget = null;
-        lockedChainTarget = null;
         chainRetargetLockoutTimer = chainRetargetLockoutDuration;
 
-        TriggerFovKick(
-            chainLaunchCameraKickAmount,
-            speedCameraKickHoldTime,
-            speedCameraKickInSpeed,
-            speedCameraKickOutSpeed
-        );
+        if (followCamera != null)
+            followCamera.PlayChainLaunchCameraJuice();
 
         chainHitRoutine = null;
+
+        if (followCamera != null)
+        {
+            followCamera.TriggerShake(0.28f, 0.18f);
+        }
+
     }
 
     private bool CanDash()
@@ -1317,17 +1327,52 @@ public class HamsterBallController : MonoBehaviour
         float intoRoadSpeed = Vector3.Dot(rb.linearVelocity, -roadAttachmentUp);
         if (intoRoadSpeed > roadAttachmentMaxIntoRoadSpeed)
             rb.linearVelocity += roadAttachmentUp * (intoRoadSpeed - roadAttachmentMaxIntoRoadSpeed);
+
+        PreventBackwardsRoadTravel();
+    }
+
+    private void PreventBackwardsRoadTravel()
+    {
+        if (!hasRoadAttachmentThisFrame)
+            return;
+
+        Vector3 roadForward = roadAttachmentForward;
+        roadForward = Vector3.ProjectOnPlane(roadForward, roadAttachmentUp);
+
+        if (roadForward.sqrMagnitude < 0.0001f)
+            return;
+
+        roadForward.Normalize();
+
+        Vector3 velocity = rb.linearVelocity;
+        Vector3 verticalVelocity = Vector3.Project(velocity, roadAttachmentUp);
+        Vector3 planarVelocity = Vector3.ProjectOnPlane(velocity, roadAttachmentUp);
+
+        float planarSpeed = planarVelocity.magnitude;
+
+        if (planarSpeed < 0.1f)
+            planarSpeed = maxGroundSpeed * 0.5f;
+
+        float forwardDot = Vector3.Dot(planarVelocity.normalized, roadForward);
+
+        // If moving even slightly backwards, HARD SNAP velocity to the spline's correct direction.
+        if (forwardDot < 0f)
+        {
+            rb.linearVelocity = roadForward * planarSpeed + verticalVelocity;
+
+            facingYaw = Mathf.Atan2(roadForward.x, roadForward.z) * Mathf.Rad2Deg;
+            lastStableMoveDirection = roadForward;
+            smoothedVisualForward = roadForward;
+        }
     }
 
     private void ApplyDrive(float dt)
     {
         Vector3 desiredForward = GetBiasedMoveDirection();
 
-        float accelToApply = forwardAcceleration + boostAccelerationBonus;
-
+        float accelToApply = forwardAcceleration;
         float baseMaxSpeed = isGrounded ? maxGroundSpeed : maxAirSpeed;
-        float maxSpeed = baseMaxSpeed + boostMaxSpeedBonus;
-
+        float maxSpeed = baseMaxSpeed;
         bool isUsingDashDrive = false;
 
         if (isChainDashing && activeChainTarget != null)
@@ -1604,12 +1649,7 @@ public class HamsterBallController : MonoBehaviour
         if (!triggerSpeedCameraKick || followCamera == null)
             return;
 
-        followCamera.TriggerFovKick(
-            speedCameraKickAmount,
-            speedCameraKickHoldTime,
-            speedCameraKickInSpeed,
-            speedCameraKickOutSpeed
-        );
+        followCamera.PlayDashCameraJuice();
     }
 
     private void TriggerFovKick(float amount, float hold, float inSpeed, float outSpeed)
@@ -1642,46 +1682,16 @@ public class HamsterBallController : MonoBehaviour
         return lastGroundNormal;
     }
 
-    public ChainDashTarget GetLockedChainTarget()
+    public float GetSteerInput()
     {
-        return lockedChainTarget;
+        return steerInput;
     }
 
-    public bool HasLockedChainTarget()
-    {
-        return lockedChainTarget != null && !isChainDashing && !isInChainHitStop && chainRetargetLockoutTimer <= 0f;
-    }
+    
 
-    public void ApplySpeedBoost(float accelerationBonus, float maxSpeedBonus, float duration, float instantSpeedBonus = 0f)
-    {
-        boostAccelerationBonus = Mathf.Max(boostAccelerationBonus, accelerationBonus);
-        boostMaxSpeedBonus = Mathf.Max(boostMaxSpeedBonus, maxSpeedBonus);
-        boostTimer = Mathf.Max(boostTimer, duration);
+    
 
-        if (instantSpeedBonus > 0f)
-        {
-            Vector3 horizontal = GetHorizontalVelocity();
-            Vector3 boostDir = horizontal.sqrMagnitude > 0.001f
-                ? horizontal.normalized
-                : GetForwardFromFacing();
-
-            float currentSpeed = horizontal.magnitude;
-            float boostedSpeed = currentSpeed + instantSpeedBonus;
-
-            rb.linearVelocity = new Vector3(
-                boostDir.x * boostedSpeed,
-                rb.linearVelocity.y,
-                boostDir.z * boostedSpeed
-            );
-        }
-
-        TriggerSharedSpeedCameraKick();
-    }
-
-    public bool HasActiveSpeedBoost()
-    {
-        return boostTimer > 0f;
-    }
+    
 
     private void OnGUI()
     {
@@ -1715,5 +1725,190 @@ public class HamsterBallController : MonoBehaviour
 
         hover += rail.extraHoverClearance;
         return hover;
+    }
+
+    private void OnDrawGizmos()
+    {
+        DrawRailSwitchDebug();
+    }
+
+    private void DrawRailSwitchDebug()
+    {
+        if (!drawRailSwitchDebug)
+            return;
+
+        if (!Application.isPlaying)
+            return;
+
+        if (!isRailGrinding || activeRailSpline == null)
+            return;
+
+        if (railSplines == null || railSplines.Length == 0)
+            return;
+
+        bool hasSwitchInput = Mathf.Abs(steerInput) >= railSwitchInputThreshold;
+        float desiredSide = 0f;
+
+        if (hasSwitchInput)
+        {
+            desiredSide = Mathf.Sign(steerInput);
+
+            if (invertRailSwitchInput)
+                desiredSide *= -1f;
+        }
+
+        RailGrindSplineDreamteck bestRail = null;
+        RailGrindSplineDreamteck.RailSample bestSample = default;
+        float bestDistance = float.PositiveInfinity;
+
+        for (int i = 0; i < railSplines.Length; i++)
+        {
+            RailGrindSplineDreamteck rail = railSplines[i];
+
+            if (rail == null || rail == activeRailSpline)
+                continue;
+
+            bool found;
+
+            if (hasSwitchInput)
+            {
+                found = rail.TryFindSwitchTarget(
+                    activeRailSample,
+                    transform.position,
+                    desiredSide,
+                    railSwitchDistance,
+                    out RailGrindSplineDreamteck.RailSample switchedSample
+                );
+
+                if (!found)
+                    continue;
+
+                if (switchedSample.distance < bestDistance)
+                {
+                    bestDistance = switchedSample.distance;
+                    bestRail = rail;
+                    bestSample = switchedSample;
+                }
+            }
+            else
+            {
+                found = rail.TryProject(transform.position, out RailGrindSplineDreamteck.RailSample switchedSample);
+
+                if (!found)
+                    continue;
+
+                if (switchedSample.distance > railSwitchDistance)
+                    continue;
+
+                if (switchedSample.distance < bestDistance)
+                {
+                    bestDistance = switchedSample.distance;
+                    bestRail = rail;
+                    bestSample = switchedSample;
+                }
+            }
+        }
+
+        if (bestRail == null)
+            return;
+
+        float hoverOffset = GetRailHoverOffset(bestRail);
+
+        Vector3 landingPoint =
+            bestSample.point +
+            bestSample.up * (hoverOffset + railSwitchDebugLift);
+
+        Gizmos.color = Color.magenta;
+        Gizmos.DrawSphere(landingPoint, railSwitchDebugSphereRadius);
+
+        Gizmos.color = Color.white;
+        Gizmos.DrawLine(transform.position, landingPoint);
+
+        Gizmos.color = Color.green;
+        Gizmos.DrawRay(landingPoint, bestSample.forward.normalized * 1.5f);
+
+        Gizmos.color = Color.blue;
+        Gizmos.DrawRay(landingPoint, bestSample.up.normalized * 1.0f);
+    }
+
+    private void UpdateRailSwitchPreviewObject()
+    {
+        if (!showRailSwitchPreviewObject || railSwitchPreviewPrefab == null)
+            return;
+
+        if (railSwitchPreviewInstance == null)
+        {
+            railSwitchPreviewInstance = Instantiate(railSwitchPreviewPrefab);
+            railSwitchPreviewInstance.name = railSwitchPreviewPrefab.name + "_RailSwitchPreview";
+            railSwitchPreviewInstance.SetActive(false);
+        }
+
+        if (!isRailGrinding || activeRailSpline == null)
+        {
+            railSwitchPreviewInstance.SetActive(false);
+            return;
+        }
+
+        if (!TryGetRailSwitchPreview(out RailGrindSplineDreamteck bestRail, out RailGrindSplineDreamteck.RailSample bestSample))
+        {
+            railSwitchPreviewInstance.SetActive(false);
+            return;
+        }
+
+        float hoverOffset = GetRailHoverOffset(bestRail);
+
+        Vector3 previewPosition =
+            bestSample.point +
+            bestSample.up * (hoverOffset + railSwitchPreviewObjectLift);
+
+        railSwitchPreviewInstance.transform.position = previewPosition;
+
+        if (bestSample.forward.sqrMagnitude > 0.001f && bestSample.up.sqrMagnitude > 0.001f)
+        {
+            railSwitchPreviewInstance.transform.rotation =
+                Quaternion.LookRotation(bestSample.forward.normalized, bestSample.up.normalized);
+        }
+
+        if (!railSwitchPreviewInstance.activeSelf)
+            railSwitchPreviewInstance.SetActive(true);
+    }
+
+    private bool TryGetRailSwitchPreview(
+     out RailGrindSplineDreamteck bestRail,
+     out RailGrindSplineDreamteck.RailSample bestSample)
+    {
+        bestRail = null;
+        bestSample = default;
+
+        if (!isRailGrinding || activeRailSpline == null)
+            return false;
+
+        if (railSplines == null || railSplines.Length == 0)
+            return false;
+
+        float bestDistance = float.PositiveInfinity;
+
+        for (int i = 0; i < railSplines.Length; i++)
+        {
+            RailGrindSplineDreamteck rail = railSplines[i];
+
+            if (rail == null || rail == activeRailSpline)
+                continue;
+
+            if (!rail.TryProject(transform.position, out RailGrindSplineDreamteck.RailSample candidate))
+                continue;
+
+            if (candidate.distance > railSwitchDistance)
+                continue;
+
+            if (candidate.distance < bestDistance)
+            {
+                bestDistance = candidate.distance;
+                bestRail = rail;
+                bestSample = candidate;
+            }
+        }
+
+        return bestRail != null;
     }
 }

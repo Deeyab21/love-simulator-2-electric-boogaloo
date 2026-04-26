@@ -7,7 +7,6 @@ public class RunnerFollowCamera : MonoBehaviour
     public HamsterBallController runner;
 
     [Header("Camera")]
-    [Tooltip("Camera whose FOV will be adjusted. If null, uses Camera on this object or children.")]
     public Camera targetCamera;
 
     [Header("Base Follow")]
@@ -34,8 +33,19 @@ public class RunnerFollowCamera : MonoBehaviour
     public float maxSlopePitchOffset = 12f;
     public float slopePitchSmoothSpeed = 5f;
 
+    [Header("Turning Juice - Camera Bank")]
+    public bool useTurnBank = true;
+    public float maxBankAngle = 10f;
+    public float bankSmoothSpeed = 8f;
+    public float bankReturnSpeed = 6f;
+
+    [Header("Jump Juice")]
+    public bool useJumpCamera = true;
+    public float airborneHeightBonus = 0.55f;
+    public float airborneLookAheadBonus = 0.4f;
+    public float jumpSmoothSpeed = 5f;
+
     [Header("Speed Effects")]
-    [Tooltip("Small sustained camera changes based on current speed.")]
     public bool useSpeedEffects = true;
     public float speedForMaxEffect = 35f;
     public float extraDistanceAtMaxSpeed = 1.0f;
@@ -51,6 +61,33 @@ public class RunnerFollowCamera : MonoBehaviour
     public float defaultKickInSpeed = 14f;
     public float defaultKickOutSpeed = 5f;
 
+    [Header("Dash Camera Juice")]
+    public float dashFovKickAmount = 9f;
+    public float dashFovHoldTime = 0.22f;
+    public float dashFovInSpeed = 14f;
+    public float dashFovOutSpeed = 5f;
+    public float dashShakeIntensity = 0.12f;
+    public float dashShakeDuration = 0.12f;
+
+    [Header("Attack Attach Camera Juice")]
+    public float attackAttachFovKickAmount = 14f;
+    public float attackAttachFovHoldTime = 0.08f;
+    public float attackAttachFovInSpeed = 22f;
+    public float attackAttachFovOutSpeed = 9f;
+    public float attackAttachShakeIntensity = 0.08f;
+    public float attackAttachShakeDuration = 0.08f;
+
+    [Header("Chain Launch Camera Juice")]
+    public float chainLaunchFovKickAmount = 11f;
+    public float chainLaunchFovHoldTime = 0.22f;
+    public float chainLaunchFovInSpeed = 14f;
+    public float chainLaunchFovOutSpeed = 5f;
+    public float chainLaunchShakeIntensity = 0.28f;
+    public float chainLaunchShakeDuration = 0.18f;
+
+    [Header("Camera Shake")]
+    public bool useCameraShake = true;
+
     [Header("Debug")]
     public bool drawDebug = true;
 
@@ -65,6 +102,14 @@ public class RunnerFollowCamera : MonoBehaviour
     private float kickHoldTimer;
     private float kickInSpeed;
     private float kickOutSpeed;
+
+    private float currentBank;
+    private float currentJumpOffset;
+    private float currentJumpLookAheadOffset;
+
+    private float shakeTimer;
+    private float shakeDuration;
+    private float shakeIntensity;
 
     private void Start()
     {
@@ -162,6 +207,9 @@ public class RunnerFollowCamera : MonoBehaviour
             currentLookAheadDistance += extraLookAheadAtMaxSpeed * speed01;
         }
 
+        UpdateJumpJuice(ref currentFollowHeight, ref currentLookAheadDistance);
+        UpdateBanking();
+
         Quaternion yawRotation = Quaternion.Euler(0f, currentYaw, 0f);
 
         Vector3 lookAhead = smoothedHeading * currentLookAheadDistance;
@@ -186,6 +234,8 @@ public class RunnerFollowCamera : MonoBehaviour
             positionSmoothTime
         );
 
+        ApplyCameraShake();
+
         Quaternion lookRotation = Quaternion.LookRotation(targetLookPoint - transform.position, Vector3.up);
         Vector3 euler = lookRotation.eulerAngles;
 
@@ -197,7 +247,83 @@ public class RunnerFollowCamera : MonoBehaviour
             slopePitchSmoothSpeed * Time.deltaTime
         );
 
-        transform.rotation = Quaternion.Euler(fixedPitch + currentSlopePitchOffset, euler.y, 0f);
+        transform.rotation = Quaternion.Euler(
+            fixedPitch + currentSlopePitchOffset,
+            euler.y,
+            currentBank
+        );
+    }
+
+    private void UpdateJumpJuice(ref float height, ref float lookAhead)
+    {
+        if (!useJumpCamera || runner == null)
+            return;
+
+        bool grounded = runner.IsGrounded();
+
+        float targetHeightOffset = grounded ? 0f : airborneHeightBonus;
+        float targetLookAheadOffset = grounded ? 0f : airborneLookAheadBonus;
+
+        currentJumpOffset = Mathf.Lerp(
+            currentJumpOffset,
+            targetHeightOffset,
+            jumpSmoothSpeed * Time.deltaTime
+        );
+
+        currentJumpLookAheadOffset = Mathf.Lerp(
+            currentJumpLookAheadOffset,
+            targetLookAheadOffset,
+            jumpSmoothSpeed * Time.deltaTime
+        );
+
+        height += currentJumpOffset;
+        lookAhead += currentJumpLookAheadOffset;
+    }
+
+    private void UpdateBanking()
+    {
+        if (!useTurnBank || runner == null)
+        {
+            currentBank = Mathf.Lerp(currentBank, 0f, bankReturnSpeed * Time.deltaTime);
+            return;
+        }
+
+        float steer = runner.GetSteerInput();
+        float targetBank = -steer * maxBankAngle;
+
+        float smooth = Mathf.Abs(steer) > 0.01f ? bankSmoothSpeed : bankReturnSpeed;
+
+        currentBank = Mathf.Lerp(
+            currentBank,
+            targetBank,
+            smooth * Time.deltaTime
+        );
+    }
+
+    private void ApplyCameraShake()
+    {
+        if (!useCameraShake || shakeTimer <= 0f)
+            return;
+
+        shakeTimer -= Time.deltaTime;
+
+        float life01 = shakeDuration <= 0.001f
+            ? 0f
+            : Mathf.Clamp01(shakeTimer / shakeDuration);
+
+        float currentIntensity = shakeIntensity * life01;
+
+        Vector3 shakeOffset = Random.insideUnitSphere * currentIntensity;
+        shakeOffset.y *= 0.5f;
+
+        transform.position += shakeOffset;
+
+        if (shakeTimer <= 0f)
+        {
+            shakeTimer = 0f;
+            shakeDuration = 0f;
+            shakeIntensity = 0f;
+        }
     }
 
     private void UpdateFov()
@@ -242,6 +368,52 @@ public class RunnerFollowCamera : MonoBehaviour
             defaultKickInSpeed,
             defaultKickOutSpeed
         );
+    }
+
+    public void TriggerShake(float intensity, float duration)
+    {
+        if (!useCameraShake)
+            return;
+
+        shakeIntensity = Mathf.Max(shakeIntensity, intensity);
+        shakeDuration = Mathf.Max(0.01f, duration);
+        shakeTimer = Mathf.Max(shakeTimer, duration);
+    }
+
+    public void PlayDashCameraJuice()
+    {
+        TriggerFovKick(
+            dashFovKickAmount,
+            dashFovHoldTime,
+            dashFovInSpeed,
+            dashFovOutSpeed
+        );
+
+        TriggerShake(dashShakeIntensity, dashShakeDuration);
+    }
+
+    public void PlayAttackAttachCameraJuice()
+    {
+        TriggerFovKick(
+            attackAttachFovKickAmount,
+            attackAttachFovHoldTime,
+            attackAttachFovInSpeed,
+            attackAttachFovOutSpeed
+        );
+
+        TriggerShake(attackAttachShakeIntensity, attackAttachShakeDuration);
+    }
+
+    public void PlayChainLaunchCameraJuice()
+    {
+        TriggerFovKick(
+            chainLaunchFovKickAmount,
+            chainLaunchFovHoldTime,
+            chainLaunchFovInSpeed,
+            chainLaunchFovOutSpeed
+        );
+
+        TriggerShake(chainLaunchShakeIntensity, chainLaunchShakeDuration);
     }
 
     private float GetSpeedPercent()
@@ -333,5 +505,7 @@ public class RunnerFollowCamera : MonoBehaviour
 
         GUI.Label(new Rect(20, 165, 500, 30), $"Kick: {currentKickAmount:F1}", style);
         GUI.Label(new Rect(20, 190, 500, 30), $"Kick Hold: {kickHoldTimer:F2}", style);
+        GUI.Label(new Rect(20, 215, 500, 30), $"Bank: {currentBank:F1}", style);
+        GUI.Label(new Rect(20, 240, 500, 30), $"Shake: {shakeTimer:F2}", style);
     }
 }
