@@ -1416,6 +1416,10 @@ public class HamsterBallController : MonoBehaviour
         rb.angularVelocity = Vector3.zero;
 
         float hitStop = hitTarget.GetHitStopDuration();
+
+        if (followCamera != null && hitStop > 0f)
+            followCamera.PlayAttackHitStopCamera(hitStop + 0.08f);
+
         if (hitStop > 0f)
             yield return new WaitForSeconds(hitStop);
 

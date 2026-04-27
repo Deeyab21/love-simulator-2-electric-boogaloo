@@ -77,6 +77,14 @@ public class RunnerFollowCamera : MonoBehaviour
     public float attackAttachShakeIntensity = 0.08f;
     public float attackAttachShakeDuration = 0.08f;
 
+    [Header("Attack Hit Stop Camera")]
+    public float attackStopCameraDuration = 0.16f;
+    public float attackStopFollowDistance = 6.2f;
+    public float attackStopFollowHeight = 3.0f;
+    public float attackStopLookAheadDistance = 1.0f;
+    public float attackStopPositionSmoothTime = 0.08f;
+    public bool lockHeadingDuringAttackStop = true;
+
     [Header("Chain Launch Camera Juice")]
     public float chainLaunchFovKickAmount = 11f;
     public float chainLaunchFovHoldTime = 0.22f;
@@ -110,6 +118,9 @@ public class RunnerFollowCamera : MonoBehaviour
     private float shakeTimer;
     private float shakeDuration;
     private float shakeIntensity;
+
+    private float attackStopTimer;
+    private float lockedAttackYaw;
 
     private void Start()
     {
@@ -151,7 +162,20 @@ public class RunnerFollowCamera : MonoBehaviour
         if (target == null)
             return;
 
-        UpdateHeading();
+        if (attackStopTimer > 0f)
+        {
+            attackStopTimer -= Time.deltaTime;
+
+            if (!lockHeadingDuringAttackStop)
+                UpdateHeading();
+            else
+                currentYaw = lockedAttackYaw;
+        }
+        else
+        {
+            UpdateHeading();
+        }
+
         UpdateCameraPositionAndRotation();
         UpdateFov();
     }
@@ -199,6 +223,15 @@ public class RunnerFollowCamera : MonoBehaviour
         float currentFollowDistance = followDistance;
         float currentFollowHeight = followHeight;
         float currentLookAheadDistance = lookAheadDistance;
+        float currentSmoothTime = positionSmoothTime;
+
+        if (attackStopTimer > 0f)
+        {
+            currentFollowDistance = attackStopFollowDistance;
+            currentFollowHeight = attackStopFollowHeight;
+            currentLookAheadDistance = attackStopLookAheadDistance;
+            currentSmoothTime = attackStopPositionSmoothTime;
+        }
 
         if (useSpeedEffects)
         {
@@ -231,7 +264,7 @@ public class RunnerFollowCamera : MonoBehaviour
             transform.position,
             desiredPosition,
             ref positionVelocity,
-            positionSmoothTime
+            currentSmoothTime
         );
 
         ApplyCameraShake();
@@ -252,6 +285,14 @@ public class RunnerFollowCamera : MonoBehaviour
             euler.y,
             currentBank
         );
+    }
+
+    public void PlayAttackHitStopCamera(float duration)
+    {
+        attackStopTimer = Mathf.Max(attackStopTimer, duration);
+
+        lockedAttackYaw = currentYaw;
+        positionVelocity = Vector3.zero;
     }
 
     private void UpdateJumpJuice(ref float height, ref float lookAhead)
