@@ -189,6 +189,14 @@ public class HamsterBallController : MonoBehaviour
     [Tooltip("How close another rail must be to allow switching.")]
     public float railSwitchDistance = 3.0f;
 
+    [Tooltip("How far ahead along the current rail we check for switch targets.")]
+    public float railSwitchLookAheadDistance = 4.0f;
+
+
+
+    [Tooltip("How many points inside the forward/back switch window are tested.")]
+    public int railSwitchForgivenessSamples = 6;
+
     [Tooltip("Minimum left/right input needed to try switching rails.")]
     public float railSwitchInputThreshold = 0.45f;
 
@@ -204,6 +212,11 @@ public class HamsterBallController : MonoBehaviour
 
     [Tooltip("Invert left/right rail switching if controls feel backwards.")]
     public bool invertRailSwitchInput = true;
+
+    [Header("Rail Switch Hop")]
+    public float railSwitchHopDuration = 0.18f;
+    public float railSwitchHopHeight = 0.65f;
+    public AnimationCurve railSwitchHopCurve = AnimationCurve.EaseInOut(0f, 0f, 1f, 1f);
 
     [Header("Rail Switch Preview Object")]
     public GameObject railSwitchPreviewPrefab;
@@ -327,7 +340,18 @@ public class HamsterBallController : MonoBehaviour
     private float railSwitchCooldownTimer = 0f;
     private float railRelockTimer = 0f;
     private GameObject railSwitchPreviewInstance;
+    private bool isRailSwitchHopping;
+    private float railSwitchHopTimer;
 
+    private Vector3 railSwitchHopStartPos;
+    private Vector3 railSwitchHopMidPos;
+    private Vector3 railSwitchHopEndPos;
+
+    private Quaternion railSwitchHopStartRot;
+    private Quaternion railSwitchHopEndRot;
+
+    private RailGrindSplineDreamteck pendingRailSpline;
+    private RailGrindSplineDreamteck.RailSample pendingRailSample;
     private float JumpLaunchSpeed => (2f * jumpHeight) / Mathf.Max(0.01f, timeToApex);
     private float RiseGravity => (2f * jumpHeight) / Mathf.Max(0.01f, timeToApex * timeToApex);
     private float FallGravity => (2f * jumpHeight) / Mathf.Max(0.01f, timeToDescend * timeToDescend);
@@ -499,6 +523,9 @@ public class HamsterBallController : MonoBehaviour
         activeRailSpline = null;
         currentRailSpeed = 0f;
         railSwitchCooldownTimer = 0f;
+        isRailSwitchHopping = false;
+        pendingRailSpline = null;
+        rb.isKinematic = false;
 
         Vector3 targetPos = respawnPoint != null ? respawnPoint.position : Vector3.zero;
         Quaternion targetRot = respawnPoint != null ? respawnPoint.rotation : Quaternion.identity;
@@ -647,11 +674,7 @@ public class HamsterBallController : MonoBehaviour
         return facing;
     }
 
-    private ChainDashTarget FindBestChainTarget()
-    {
-        return FindBestChainTargetFromDirection(GetForwardFromFacing());
-    }
-
+    
     private ChainDashTarget FindBestChainTargetFromDirection(Vector3 aimForward)
     {
         Vector3 origin = transform.position;
@@ -866,13 +889,19 @@ public class HamsterBallController : MonoBehaviour
             return;
         }
 
+        if (isRailSwitchHopping)
+        {
+            UpdateRailSwitchHop(dt);
+            return;
+        }
+
         if (jumpPressed)
         {
             ExitRailGrind(true);
             return;
         }
 
-        TryStartRailDashBoost();
+    TryStartRailDashBoost();
 
         float targetRailSpeed = railGrindSpeed;
         float railAcceleration = railGrindAcceleration;
@@ -905,15 +934,17 @@ public class HamsterBallController : MonoBehaviour
 
         if (!activeRailSpline.IsClosed())
         {
-            if (activeRailSample.percent <= 0.0001 || activeRailSample.percent >= 0.9999)
+            if (activeRailSample.percent >= 0.9999)
             {
+                ForceRailEndSampleForward();
                 ExitRailGrind(false);
                 return;
             }
         }
 
         TrySwitchRail();
-        Vector3 railForward = activeRailSample.forward * railTravelDirection;
+
+        Vector3 railForward = activeRailSample.forward;
         if (railForward.sqrMagnitude < 0.0001f)
             railForward = GetForwardFromFacing();
 
@@ -958,6 +989,76 @@ public class HamsterBallController : MonoBehaviour
         hasRoadAttachmentThisFrame = false;
     }
 
+    private void ForceRailEndSampleForward()
+    {
+        if (activeRailSpline == null)
+            return;
+
+        // Sample slightly before the very end.
+        // This avoids bad tangent spikes at percent 1.0.
+        double safeEndPercent = 0.995;
+
+        if (!activeRailSpline.SampleAtPercent(
+                safeEndPercent,
+                out RailGrindSplineDreamteck.RailSample safeSample))
+        {
+            return;
+        }
+
+        activeRailSample = safeSample;
+        railTravelDirection = 1f;
+    }
+
+    private void UpdateRailSwitchHop(float dt)
+    {
+        railSwitchHopTimer += dt;
+
+        float duration = Mathf.Max(0.01f, railSwitchHopDuration);
+        float rawT = Mathf.Clamp01(railSwitchHopTimer / duration);
+
+        float t = railSwitchHopCurve != null
+            ? railSwitchHopCurve.Evaluate(rawT)
+            : rawT;
+
+        Vector3 pos = QuadraticBezier(
+            railSwitchHopStartPos,
+            railSwitchHopMidPos,
+            railSwitchHopEndPos,
+            t
+        );
+
+        rb.position = pos;
+
+        if (rotateRootToRail)
+            rb.rotation = Quaternion.Slerp(railSwitchHopStartRot, railSwitchHopEndRot, t);
+
+        if (rawT >= 1f)
+            FinishRailSwitchHop();
+    }
+
+    private Vector3 QuadraticBezier(Vector3 a, Vector3 b, Vector3 c, float t)
+    {
+        float u = 1f - t;
+        return (u * u * a) + (2f * u * t * b) + (t * t * c);
+    }
+
+    private void FinishRailSwitchHop()
+    {
+        isRailSwitchHopping = false;
+
+        activeRailSpline = pendingRailSpline;
+        activeRailSample = pendingRailSample;
+        pendingRailSpline = null;
+
+        railTravelDirection = 1f;
+
+        rb.isKinematic = false;
+        rb.position = railSwitchHopEndPos;
+        rb.rotation = railSwitchHopEndRot;
+        rb.linearVelocity = activeRailSample.forward.normalized * Mathf.Max(currentRailSpeed, railGrindSpeed);
+        rb.angularVelocity = Vector3.zero;
+    }
+
     private void TryStartRailDashBoost()
     {
         if (!dashPressed)
@@ -996,42 +1097,178 @@ public class HamsterBallController : MonoBehaviour
         if (invertRailSwitchInput)
             desiredSide *= -1f;
 
-        RailGrindSplineDreamteck bestRail = null;
-        RailGrindSplineDreamteck.RailSample bestSample = default;
-        float bestDistance = float.PositiveInfinity;
-
-        for (int i = 0; i < railSplines.Length; i++)
+        if (!TryFindBufferedRailSwitchTarget(
+                desiredSide,
+                true,
+                out RailGrindSplineDreamteck bestRail,
+                out RailGrindSplineDreamteck.RailSample bestSample))
         {
-            RailGrindSplineDreamteck rail = railSplines[i];
-            if (rail == null || rail == activeRailSpline)
-                continue;
+            return;
+        }
 
-            if (!rail.TryFindSwitchTarget(
-                    activeRailSample,
-                    rb.position,
-                    desiredSide,
-                    railSwitchDistance,
-                    out RailGrindSplineDreamteck.RailSample switchedSample))
+        StartRailSwitchHop(bestRail, bestSample);
+    }
+
+    private void StartRailSwitchHop(RailGrindSplineDreamteck targetRail, RailGrindSplineDreamteck.RailSample targetSample)
+    {
+        if (targetRail == null)
+            return;
+
+        isRailSwitchHopping = true;
+        railSwitchHopTimer = 0f;
+
+        pendingRailSpline = targetRail;
+
+        float duration = Mathf.Max(0.01f, railSwitchHopDuration);
+        float predictedTravelDistance = Mathf.Max(currentRailSpeed, railGrindSpeed) * duration;
+
+        if (!targetRail.Travel(
+                targetSample.percent,
+                predictedTravelDistance,
+                Spline.Direction.Forward,
+                out pendingRailSample))
+        {
+            pendingRailSample = targetSample;
+        }
+
+        float hoverOffset = GetRailHoverOffset(targetRail);
+
+        railSwitchHopStartPos = rb.position;
+        railSwitchHopEndPos =
+            pendingRailSample.point +
+            pendingRailSample.up.normalized * hoverOffset;
+
+        Vector3 arcUp = Vector3.Slerp(
+            activeRailSample.up.normalized,
+            pendingRailSample.up.normalized,
+            0.5f
+        ).normalized;
+
+        railSwitchHopMidPos =
+            (railSwitchHopStartPos + railSwitchHopEndPos) * 0.5f +
+            arcUp * railSwitchHopHeight;
+
+        Vector3 endForward = pendingRailSample.forward;
+        if (endForward.sqrMagnitude < 0.001f)
+            endForward = GetForwardFromFacing();
+
+        endForward.Normalize();
+
+        railSwitchHopStartRot = rb.rotation;
+        railSwitchHopEndRot = Quaternion.LookRotation(
+            endForward,
+            pendingRailSample.up.normalized
+        );
+
+        rb.linearVelocity = Vector3.zero;
+        rb.angularVelocity = Vector3.zero;
+        rb.isKinematic = true;
+
+        railSwitchCooldownTimer = railSwitchCooldown;
+    }
+
+    private bool TryFindBufferedRailSwitchTarget(
+    float desiredSide,
+    bool requireCorrectSide,
+    out RailGrindSplineDreamteck bestRail,
+    out RailGrindSplineDreamteck.RailSample bestSample)
+    {
+        bestRail = null;
+        bestSample = default;
+
+        if (activeRailSpline == null || railSplines == null || railSplines.Length == 0)
+            return false;
+
+        int samples = Mathf.Max(1, railSwitchForgivenessSamples);
+        float bestScore = float.PositiveInfinity;
+
+        for (int s = 0; s <= samples; s++)
+        {
+            float t = samples <= 0 ? 0f : s / (float)samples;
+            float offsetDistance = Mathf.Lerp(0f, railSwitchLookAheadDistance, t);
+            RailGrindSplineDreamteck.RailSample probeSample;
+
+            if (Mathf.Abs(offsetDistance) < 0.001f)
             {
-                continue;
+                probeSample = activeRailSample;
+            }
+            else
+            {
+                Spline.Direction probeDirection = offsetDistance >= 0f
+                    ? Spline.Direction.Forward
+                    : Spline.Direction.Backward;
+
+                if (!activeRailSpline.Travel(
+                        activeRailSample.percent,
+                        Mathf.Abs(offsetDistance),
+                        probeDirection,
+                        out probeSample))
+                {
+                    continue;
+                }
             }
 
-            if (switchedSample.distance < bestDistance)
+            for (int i = 0; i < railSplines.Length; i++)
             {
-                bestDistance = switchedSample.distance;
-                bestRail = rail;
-                bestSample = switchedSample;
+                RailGrindSplineDreamteck rail = railSplines[i];
+
+                if (rail == null || rail == activeRailSpline)
+                    continue;
+
+                bool found;
+
+                if (requireCorrectSide)
+                {
+                    found = rail.TryFindSwitchTarget(
+                        probeSample,
+                        probeSample.point,
+                        desiredSide,
+                        railSwitchDistance,
+                        out RailGrindSplineDreamteck.RailSample candidate
+                    );
+
+                    if (!found)
+                        continue;
+
+                    float lateralScore = candidate.distance;
+                    float timingScore = Mathf.Abs(offsetDistance) * 0.25f;
+                    float totalScore = lateralScore + timingScore;
+
+                    if (totalScore < bestScore)
+                    {
+                        bestScore = totalScore;
+                        bestRail = rail;
+                        bestSample = candidate;
+                    }
+                }
+                else
+                {
+                    found = rail.TryProject(
+                        probeSample.point,
+                        out RailGrindSplineDreamteck.RailSample candidate
+                    );
+
+                    if (!found)
+                        continue;
+
+                    if (candidate.distance > railSwitchDistance)
+                        continue;
+
+                    float lateralScore = candidate.distance;
+                    float timingScore = Mathf.Abs(offsetDistance) * 0.25f;
+                    float totalScore = lateralScore + timingScore;
+
+                    if (totalScore < bestScore)
+                    {
+                        bestScore = totalScore;
+                        bestRail = rail;
+                        bestSample = candidate;
+                    }
+                }
             }
         }
 
-        if (bestRail != null)
-        {
-            railTravelDirection = 1f;
-
-            activeRailSpline = bestRail;
-            activeRailSample = bestSample;
-            railSwitchCooldownTimer = railSwitchCooldown;
-        }
+        return bestRail != null;
     }
 
     private void ExitRailGrind(bool jumpedOff)
@@ -1039,12 +1276,15 @@ public class HamsterBallController : MonoBehaviour
         if (!isRailGrinding)
             return;
 
-        Vector3 launchForward = activeRailSample.forward * railTravelDirection;
-
+        Vector3 launchForward = activeRailSample.forward;
         if (launchForward.sqrMagnitude < 0.0001f)
             launchForward = GetForwardFromFacing();
 
         launchForward.Normalize();
+
+        facingYaw = Mathf.Atan2(launchForward.x, launchForward.z) * Mathf.Rad2Deg;
+        lastStableMoveDirection = launchForward;
+        smoothedVisualForward = launchForward;
 
         isRailGrinding = false;
         if (railSwitchPreviewInstance != null)
@@ -1549,8 +1789,8 @@ public class HamsterBallController : MonoBehaviour
         if (visualRoot == null)
             return;
 
-        visualRoot.position = transform.position + Vector3.up * rideHeight;
-
+        Vector3 visualUp = isRailGrinding ? activeRailSample.up.normalized : Vector3.up;
+        visualRoot.position = transform.position + visualUp * rideHeight;
         Vector3 horizontalVelocity = GetHorizontalVelocity();
         float horizontalSpeed = horizontalVelocity.magnitude;
 
@@ -1652,13 +1892,7 @@ public class HamsterBallController : MonoBehaviour
         followCamera.PlayDashCameraJuice();
     }
 
-    private void TriggerFovKick(float amount, float hold, float inSpeed, float outSpeed)
-    {
-        if (followCamera == null)
-            return;
-
-        followCamera.TriggerFovKick(amount, hold, inSpeed, outSpeed);
-    }
+   
 
     public bool IsGrounded()
     {
@@ -1874,41 +2108,25 @@ public class HamsterBallController : MonoBehaviour
     }
 
     private bool TryGetRailSwitchPreview(
-     out RailGrindSplineDreamteck bestRail,
-     out RailGrindSplineDreamteck.RailSample bestSample)
+    out RailGrindSplineDreamteck bestRail,
+    out RailGrindSplineDreamteck.RailSample bestSample)
     {
-        bestRail = null;
-        bestSample = default;
+        float desiredSide = 0f;
+        bool hasSwitchInput = Mathf.Abs(steerInput) >= railSwitchInputThreshold;
 
-        if (!isRailGrinding || activeRailSpline == null)
-            return false;
-
-        if (railSplines == null || railSplines.Length == 0)
-            return false;
-
-        float bestDistance = float.PositiveInfinity;
-
-        for (int i = 0; i < railSplines.Length; i++)
+        if (hasSwitchInput)
         {
-            RailGrindSplineDreamteck rail = railSplines[i];
+            desiredSide = Mathf.Sign(steerInput);
 
-            if (rail == null || rail == activeRailSpline)
-                continue;
-
-            if (!rail.TryProject(transform.position, out RailGrindSplineDreamteck.RailSample candidate))
-                continue;
-
-            if (candidate.distance > railSwitchDistance)
-                continue;
-
-            if (candidate.distance < bestDistance)
-            {
-                bestDistance = candidate.distance;
-                bestRail = rail;
-                bestSample = candidate;
-            }
+            if (invertRailSwitchInput)
+                desiredSide *= -1f;
         }
 
-        return bestRail != null;
+        return TryFindBufferedRailSwitchTarget(
+            desiredSide,
+            hasSwitchInput,
+            out bestRail,
+            out bestSample
+        );
     }
 }
