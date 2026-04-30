@@ -1,6 +1,7 @@
 ﻿using System.Collections;
 using UnityEngine;
 using Dreamteck.Splines;
+using UnityEngine.InputSystem;
 
 [RequireComponent(typeof(Rigidbody))]
 [RequireComponent(typeof(SphereCollider))]
@@ -192,7 +193,9 @@ public class HamsterBallController : MonoBehaviour
     [Tooltip("How far ahead along the current rail we check for switch targets.")]
     public float railSwitchLookAheadDistance = 4.0f;
 
-
+    [Tooltip("Do not allow switching onto a rail if the landing point is this close to the end. Example: 0.15 means the last 15% of the target rail cannot be switched onto.")]
+    [Range(0f, 0.5f)]
+    public float railSwitchTargetEndBufferPercent = 0.15f;
 
     [Tooltip("How many points inside the forward/back switch window are tested.")]
     public int railSwitchForgivenessSamples = 6;
@@ -1167,6 +1170,22 @@ public class HamsterBallController : MonoBehaviour
         railSwitchCooldownTimer = railSwitchCooldown;
     }
 
+    private bool IsValidRailSwitchLanding(RailGrindSplineDreamteck targetRail, RailGrindSplineDreamteck.RailSample targetSample)
+    {
+        if (targetRail == null)
+            return false;
+
+        // Closed rails loop forever, so they do not have a dangerous "end".
+        if (targetRail.IsClosed())
+            return true;
+
+        float endBuffer = Mathf.Clamp01(railSwitchTargetEndBufferPercent);
+
+        // Rails are forward-only in your current setup: 0 -> 1.
+        // So prevent switching onto the final chunk of the target rail.
+        return targetSample.percent <= 1.0 - endBuffer;
+    }
+
     private bool TryFindBufferedRailSwitchTarget(
     float desiredSide,
     bool requireCorrectSide,
@@ -1220,14 +1239,17 @@ public class HamsterBallController : MonoBehaviour
                 if (requireCorrectSide)
                 {
                     found = rail.TryFindSwitchTarget(
-                        probeSample,
-                        probeSample.point,
-                        desiredSide,
-                        railSwitchDistance,
-                        out RailGrindSplineDreamteck.RailSample candidate
-                    );
+     probeSample,
+     probeSample.point,
+     desiredSide,
+     railSwitchDistance,
+     out RailGrindSplineDreamteck.RailSample candidate
+ );
 
                     if (!found)
+                        continue;
+
+                    if (!IsValidRailSwitchLanding(rail, candidate))
                         continue;
 
                     float lateralScore = candidate.distance;
@@ -1252,6 +1274,9 @@ public class HamsterBallController : MonoBehaviour
                         continue;
 
                     if (candidate.distance > railSwitchDistance)
+                        continue;
+
+                    if (!IsValidRailSwitchLanding(rail, candidate))
                         continue;
 
                     float lateralScore = candidate.distance;

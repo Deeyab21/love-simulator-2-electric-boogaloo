@@ -19,6 +19,12 @@ public class SplinePointSampler : MonoBehaviour
     [SerializeField] private bool generateUVs = true;
     [SerializeField] private float metersPerUVTile = 5f;
 
+    [Header("Intersection UVs")]
+    [SerializeField] private bool useWorldSpaceJunctionUVs = true;
+
+    [Tooltip("How many world meters equal one texture tile on the intersection mesh. Match this to metersPerUVTile first.")]
+    [SerializeField] private float junctionWorldUVTileMeters = 5f;
+
     [Header("Intersections")]
     [SerializeField] private bool buildIntersections = true;
     [SerializeField] private float junctionMergeDistance = 5f;
@@ -500,26 +506,30 @@ public class SplinePointSampler : MonoBehaviour
         List<Vector3> ringPoints = new();
         GetJunctionRingWorldPoints(junction, ringPoints);
 
+        if (ringPoints.Count < 3)
+            return;
+
         int centerIndex = verts.Count;
-        Vector3 localCenter = transform.InverseTransformPoint(junction.center);
+
+        Vector3 worldCenter = junction.center;
+        Vector3 localCenter = transform.InverseTransformPoint(worldCenter);
+
         verts.Add(localCenter);
 
         if (generateUVs)
-            uvs.Add(new Vector2(0.5f, 0.5f));
+            uvs.Add(GetJunctionUV(worldCenter, worldCenter));
 
         int ringStart = verts.Count;
-        float uvScale = 1f / Mathf.Max(0.001f, m_splineSampler.Width * 4f);
 
         for (int i = 0; i < ringPoints.Count; i++)
         {
-            Vector3 local = transform.InverseTransformPoint(ringPoints[i]);
+            Vector3 worldPoint = ringPoints[i];
+            Vector3 local = transform.InverseTransformPoint(worldPoint);
+
             verts.Add(local);
 
             if (generateUVs)
-            {
-                Vector3 d = local - localCenter;
-                uvs.Add(new Vector2(0.5f + d.x * uvScale, 0.5f + d.z * uvScale));
-            }
+                uvs.Add(GetJunctionUV(worldPoint, worldCenter));
         }
 
         for (int i = 0; i < ringPoints.Count; i++)
@@ -531,6 +541,27 @@ public class SplinePointSampler : MonoBehaviour
             tris.Add(a);
             tris.Add(b);
         }
+    }
+
+    private Vector2 GetJunctionUV(Vector3 worldPosition, Vector3 worldCenter)
+    {
+        if (useWorldSpaceJunctionUVs)
+        {
+            float tile = Mathf.Max(0.0001f, junctionWorldUVTileMeters);
+
+            return new Vector2(
+                worldPosition.x / tile,
+                worldPosition.z / tile
+            );
+        }
+
+        float fallbackScale = 1f / Mathf.Max(0.001f, m_splineSampler.Width * 4f);
+        Vector3 localOffset = transform.InverseTransformPoint(worldPosition) - transform.InverseTransformPoint(worldCenter);
+
+        return new Vector2(
+            0.5f + localOffset.x * fallbackScale,
+            0.5f + localOffset.z * fallbackScale
+        );
     }
 
     private void UpdateDebugIntersectionMesh()

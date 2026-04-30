@@ -100,6 +100,8 @@ public class ChainDashTarget : MonoBehaviour
     [Tooltip("How long the target stays disabled after being hit.")]
     public float reactivateDelay = 0.35f;
 
+
+
     [Header("Debug")]
     public bool drawGizmos = true;
     public float directionGizmoLength = 2.5f;
@@ -480,4 +482,5 @@ public class ChainDashTarget : MonoBehaviour
         Gizmos.DrawLine(dirEnd, dirEnd + arrowBack + arrowSide);
         Gizmos.DrawLine(dirEnd, dirEnd + arrowBack - arrowSide);
     }
+
 }
