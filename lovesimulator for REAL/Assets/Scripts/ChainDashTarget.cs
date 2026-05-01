@@ -85,21 +85,7 @@ public class ChainDashTarget : MonoBehaviour
     public bool autoFindTargetGlow = true;
 
 
-    [Header("Lock-On Indicator")]
-    [Tooltip("Prefab to show while this target is being previewed / in range.")]
-    public GameObject lockOnIndicatorPrefab;
-
-    [Tooltip("Where the indicator should sit. If null, uses aimPoint, otherwise this transform.")]
-    public Transform lockOnIndicatorAnchor;
-
-    [Tooltip("World offset for the indicator.")]
-    public Vector3 lockOnIndicatorOffset = Vector3.zero;
-
-    [Tooltip("Extra rotation offset if your prefab is facing the wrong way.")]
-    public Vector3 lockOnIndicatorRotationOffset = Vector3.zero;
-
-    [Tooltip("If checked, the prefab's forward points toward the camera. If unchecked, its back points toward the camera.")]
-    public bool indicatorForwardFacesCamera = true;
+ 
 
     [Header("Availability")]
     [Tooltip("If true, the target disables briefly after being hit.")]
@@ -108,7 +94,21 @@ public class ChainDashTarget : MonoBehaviour
     [Tooltip("How long the target stays disabled after being hit.")]
     public float reactivateDelay = 0.35f;
 
+    [Header("Destroy On Hit")]
+    [Tooltip("If true, the target will be destroyed after being hit.")]
+    public bool destroyOnHit = false;
 
+    [Tooltip("Delay before the object is destroyed.")]
+    public float destroyDelay = 0.15f;
+
+    [Tooltip("VFX prefab spawned when destroyed.")]
+    public GameObject destroyVfxPrefab;
+
+    [Tooltip("Optional custom spawn point. If null, uses this transform.")]
+    public Transform destroyVfxSpawnPoint;
+
+    [Tooltip("How long the VFX lives before being cleaned up.")]
+    public float destroyVfxLifetime = 5f;
 
     [Header("Debug")]
     public bool drawGizmos = true;
@@ -123,40 +123,34 @@ public class ChainDashTarget : MonoBehaviour
     private Coroutine disableRoutine;
     private Coroutine delayedImpactRoutine;
 
-    private GameObject lockOnIndicatorInstance;
-    private Camera mainCam;
+   
 
     private void Awake()
     {
         cachedCollider = GetComponent<Collider>();
         cachedCollider.isTrigger = true;
 
-        mainCam = Camera.main;
 
         if (targetGlow == null && autoFindTargetGlow)
             targetGlow = GetComponentInChildren<ChainDashTargetGlow>(true);
 
-        CreateLockOnIndicatorIfNeeded();
-        UpdateIndicatorVisibility();
+        
     }
 
     private void OnEnable()
     {
-        UpdateIndicatorVisibility();
         UpdateTargetGlow();
     }
 
     private void OnDisable()
     {
         isPreviewed = false;
-        UpdateIndicatorVisibility();
         UpdateTargetGlow();
     }
 
     private void OnDestroy()
     {
-        if (lockOnIndicatorInstance != null)
-            Destroy(lockOnIndicatorInstance);
+        
     }
 
     private void OnValidate()
@@ -168,10 +162,7 @@ public class ChainDashTarget : MonoBehaviour
             cachedCollider.isTrigger = true;
     }
 
-    private void LateUpdate()
-    {
-        UpdateLockOnIndicator();
-    }
+ 
 
     public bool CanBeTargeted()
     {
@@ -229,7 +220,6 @@ public class ChainDashTarget : MonoBehaviour
 
         isPreviewed = previewed;
 
-        UpdateIndicatorVisibility();
         UpdateTargetGlow();
     }
 
@@ -238,6 +228,12 @@ public class ChainDashTarget : MonoBehaviour
         if (!isAvailable)
             return;
 
+        if (destroyOnHit)
+        {
+            StartCoroutine(DestroyRoutine());
+            return;
+        }
+
         if (disableTemporarilyAfterHit)
         {
             if (disableRoutine != null)
@@ -245,6 +241,36 @@ public class ChainDashTarget : MonoBehaviour
 
             disableRoutine = StartCoroutine(DisableRoutine());
         }
+    }
+
+    private IEnumerator DestroyRoutine()
+    {
+        isAvailable = false;
+        isPreviewed = false;
+
+        if (cachedCollider != null)
+            cachedCollider.enabled = false;
+
+        float delay = Mathf.Max(0f, destroyDelay);
+
+        if (delay > 0f)
+            yield return new WaitForSeconds(delay);
+
+        // Spawn VFX
+        if (destroyVfxPrefab != null)
+        {
+            Transform anchor = destroyVfxSpawnPoint != null ? destroyVfxSpawnPoint : transform;
+
+            GameObject vfx = Instantiate(
+                destroyVfxPrefab,
+                anchor.position,
+                anchor.rotation
+            );
+
+            Destroy(vfx, destroyVfxLifetime);
+        }
+
+        Destroy(gameObject);
     }
 
     public void PlayImpactVfxOnly()
@@ -389,7 +415,6 @@ public class ChainDashTarget : MonoBehaviour
     {
         isAvailable = false;
         isPreviewed = false;
-        UpdateIndicatorVisibility();
 
         if (cachedCollider != null)
             cachedCollider.enabled = false;
@@ -407,31 +432,12 @@ public class ChainDashTarget : MonoBehaviour
 
         impactTriggeredThisDisableCycle = false;
         isAvailable = true;
-        UpdateIndicatorVisibility();
         disableRoutine = null;
     }
 
-    private void CreateLockOnIndicatorIfNeeded()
-    {
-        if (lockOnIndicatorPrefab == null || lockOnIndicatorInstance != null)
-            return;
+   
 
-        lockOnIndicatorInstance = Instantiate(lockOnIndicatorPrefab);
-        lockOnIndicatorInstance.name = lockOnIndicatorPrefab.name + "_LockOnIndicator";
-        lockOnIndicatorInstance.SetActive(false);
-    }
-
-    private void UpdateIndicatorVisibility()
-    {
-        if (lockOnIndicatorInstance == null)
-            CreateLockOnIndicatorIfNeeded();
-
-        if (lockOnIndicatorInstance == null)
-            return;
-
-        bool shouldShow = isPreviewed && isAvailable;
-        lockOnIndicatorInstance.SetActive(shouldShow);
-    }
+    
 
     private void UpdateTargetGlow()
     {
@@ -445,35 +451,7 @@ public class ChainDashTarget : MonoBehaviour
         targetGlow.SetHighlighted(shouldShow);
     }
 
-    private void UpdateLockOnIndicator()
-    {
-        if (lockOnIndicatorInstance == null || !lockOnIndicatorInstance.activeSelf)
-            return;
-
-        if (mainCam == null)
-            mainCam = Camera.main;
-
-        Transform anchor = lockOnIndicatorAnchor != null
-            ? lockOnIndicatorAnchor
-            : (aimPoint != null ? aimPoint : transform);
-
-        lockOnIndicatorInstance.transform.position = anchor.position + lockOnIndicatorOffset;
-
-        if (mainCam == null)
-            return;
-
-        Vector3 toCamera = mainCam.transform.position - lockOnIndicatorInstance.transform.position;
-        if (toCamera.sqrMagnitude < 0.0001f)
-            return;
-
-        Vector3 facingDirection = indicatorForwardFacesCamera
-            ? toCamera.normalized
-            : -toCamera.normalized;
-
-        lockOnIndicatorInstance.transform.rotation =
-            Quaternion.LookRotation(facingDirection, mainCam.transform.up) *
-            Quaternion.Euler(lockOnIndicatorRotationOffset);
-    }
+  
 
     private void OnDrawGizmos()
     {

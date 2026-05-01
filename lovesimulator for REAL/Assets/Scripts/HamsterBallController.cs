@@ -802,70 +802,7 @@ public class HamsterBallController : MonoBehaviour
 
         return bestTarget;
     }
-
-    private float ScoreChainTarget(ChainDashTarget target, Vector3 aimForward)
-    {
-        if (target == null)
-            return float.NegativeInfinity;
-
-        Vector3 origin = transform.position;
-        Vector3 toTarget = target.GetAimPosition() - origin;
-        float distance = toTarget.magnitude;
-
-        if (distance <= 0.001f)
-            return float.NegativeInfinity;
-
-        Vector3 dir = toTarget / distance;
-        float angle = Vector3.Angle(aimForward, dir);
-
-        if (angle > chainTargetMaxAngle)
-            return float.NegativeInfinity;
-
-        float angleScore = 1f - (angle / chainTargetMaxAngle);
-        float distanceScore = 1f - Mathf.Clamp01(distance / chainTargetSearchRadius);
-        return angleScore * 3f + distanceScore;
-    }
-
-    private bool TryFindBestRailTarget(
-    Vector3 origin,
-    Vector3 aimForward,
-    out RailGrindSplineDreamteck bestSpline,
-    out RailGrindSplineDreamteck.RailSample bestSample,
-    out float bestScore)
-    {
-        bestSpline = null;
-        bestSample = default;
-        bestScore = float.NegativeInfinity;
-
-        if (railSplines == null || railSplines.Length == 0)
-            return false;
-
-        bool found = false;
-
-        for (int i = 0; i < railSplines.Length; i++)
-        {
-            RailGrindSplineDreamteck rail = railSplines[i];
-            if (rail == null)
-                continue;
-
-            if (rail.TryFindStartAttackTarget(
-                    origin,
-                    aimForward,
-                    out RailGrindSplineDreamteck.RailSample sample,
-                    out float score))
-            {
-                if (score > bestScore)
-                {
-                    bestScore = score;
-                    bestSpline = rail;
-                    bestSample = sample;
-                    found = true;
-                }
-            }
-        }
-
-        return found;
-    }
+    
 
     private void TryAutoCatchRail()
     {
@@ -1484,11 +1421,7 @@ public class HamsterBallController : MonoBehaviour
         if (followCamera != null)
             followCamera.PlayAttackAttachCameraJuice();
 
-        if (followCamera != null)
-        {
-            followCamera.TriggerFovKick(14f, 0.08f, 22f, 9f);
-            followCamera.TriggerShake(0.08f, 0.08f);
-        }
+        
     }
 
     private void ResolveChainDashHit()
