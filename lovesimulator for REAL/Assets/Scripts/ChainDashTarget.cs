@@ -77,6 +77,14 @@ public class ChainDashTarget : MonoBehaviour
     public Transform impactVfxSpawnPoint;
     public float impactVfxLifetime = 5f;
 
+    [Header("Lock-On Glow")]
+    [Tooltip("Optional glow used when this target is the current lock-on preview target.")]
+    public ChainDashTargetGlow targetGlow;
+
+    [Tooltip("If true, the target tries to find a ChainDashTargetGlow on itself or its children.")]
+    public bool autoFindTargetGlow = true;
+
+
     [Header("Lock-On Indicator")]
     [Tooltip("Prefab to show while this target is being previewed / in range.")]
     public GameObject lockOnIndicatorPrefab;
@@ -125,6 +133,9 @@ public class ChainDashTarget : MonoBehaviour
 
         mainCam = Camera.main;
 
+        if (targetGlow == null && autoFindTargetGlow)
+            targetGlow = GetComponentInChildren<ChainDashTargetGlow>(true);
+
         CreateLockOnIndicatorIfNeeded();
         UpdateIndicatorVisibility();
     }
@@ -132,12 +143,14 @@ public class ChainDashTarget : MonoBehaviour
     private void OnEnable()
     {
         UpdateIndicatorVisibility();
+        UpdateTargetGlow();
     }
 
     private void OnDisable()
     {
         isPreviewed = false;
         UpdateIndicatorVisibility();
+        UpdateTargetGlow();
     }
 
     private void OnDestroy()
@@ -215,7 +228,9 @@ public class ChainDashTarget : MonoBehaviour
             return;
 
         isPreviewed = previewed;
+
         UpdateIndicatorVisibility();
+        UpdateTargetGlow();
     }
 
     public void NotifyHit()
@@ -392,6 +407,7 @@ public class ChainDashTarget : MonoBehaviour
 
         impactTriggeredThisDisableCycle = false;
         isAvailable = true;
+        UpdateIndicatorVisibility();
         disableRoutine = null;
     }
 
@@ -415,6 +431,18 @@ public class ChainDashTarget : MonoBehaviour
 
         bool shouldShow = isPreviewed && isAvailable;
         lockOnIndicatorInstance.SetActive(shouldShow);
+    }
+
+    private void UpdateTargetGlow()
+    {
+        if (targetGlow == null && autoFindTargetGlow)
+            targetGlow = GetComponentInChildren<ChainDashTargetGlow>(true);
+
+        if (targetGlow == null)
+            return;
+
+        bool shouldShow = isPreviewed && isAvailable;
+        targetGlow.SetHighlighted(shouldShow);
     }
 
     private void UpdateLockOnIndicator()

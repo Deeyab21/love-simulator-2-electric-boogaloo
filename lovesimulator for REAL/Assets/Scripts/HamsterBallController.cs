@@ -153,6 +153,60 @@ public class HamsterBallController : MonoBehaviour
     [Tooltip("How long attack target re-locking is prevented after a chain launch.")]
     public float chainRetargetLockoutDuration = 0.18f;
 
+    [Header("Target Attack Impact Frame")]
+    [Tooltip("If true, chain target hits trigger a full-screen impact flash before launching away.")]
+    public bool chainImpactUseScreenFlash = true;
+
+    [Tooltip("Color of the chain hit flash.")]
+    public Color chainImpactFlashColor = Color.white;
+
+    [Tooltip("Maximum opacity of the chain hit flash.")]
+    [Range(0f, 1f)]
+    public float chainImpactFlashAlpha = 0.85f;
+
+    [Tooltip("How quickly the flash fades out.")]
+    public float chainImpactFlashFadeTime = 0.08f;
+
+    [Tooltip("Extra camera FOV punch when the target is hit.")]
+    public float chainImpactFovKickAmount = 18f;
+
+    [Tooltip("How long the impact FOV punch lasts.")]
+    public float chainImpactFovKickHoldTime = 0.06f;
+
+    [Tooltip("How quickly the impact FOV punch enters.")]
+    public float chainImpactFovKickInSpeed = 35f;
+
+    [Tooltip("How quickly the impact FOV punch exits.")]
+    public float chainImpactFovKickOutSpeed = 16f;
+
+    [Tooltip("Camera shake duration on impact.")]
+    public float chainImpactShakeDuration = 0.10f;
+
+    [Tooltip("Camera shake strength on impact.")]
+    public float chainImpactShakeStrength = 0.16f;
+
+    [Tooltip("If true, the target's impact VFX spawns at the start of hit-stop instead of after hit-stop.")]
+    public bool chainImpactVfxBeforeLaunch = true;
+
+    [Header("Magnetic Barrier Splines")]
+    [Tooltip("If true, the player checks manually placed Dreamteck magnetic barrier splines.")]
+    public bool useMagneticBarriers = true;
+
+    [Tooltip("Optional explicit list of barrier splines. Leave empty to use all active MagneticBarrierSplineDreamteck objects in the scene.")]
+    public MagneticBarrierSplineDreamteck[] magneticBarrierSplines;
+
+    [Tooltip("If true, auto-finds barrier splines on Awake when the list is empty.")]
+    public bool autoFindMagneticBarriers = true;
+
+    [Tooltip("Extra radius used when checking the player against barrier splines.")]
+    public float magneticBarrierPlayerRadiusPadding = 0.05f;
+
+    [Tooltip("If true, draw the current active barrier influence from the player.")]
+    public bool drawCurrentMagneticBarrierDebug = true;
+
+    [Tooltip("Radius of the active closest-point debug marker.")]
+    public float magneticBarrierDebugSphereRadius = 0.22f;
+
     [Header("Rail Grinding")]
     [Tooltip("All rail grind splines in the scene. Leave empty to auto-find.")]
     public RailGrindSplineDreamteck[] railSplines;
@@ -324,7 +378,9 @@ public class HamsterBallController : MonoBehaviour
     private Vector3 smoothedVisualForward = Vector3.forward;
     private Vector3 lastStableMoveDirection = Vector3.forward;
 
+
     private ChainDashTarget activeChainTarget;
+    private ChainDashTarget previewedChainTarget;
     private bool isChainDashing;
     private bool isInChainHitStop;
     private Coroutine chainHitRoutine;
@@ -334,6 +390,9 @@ public class HamsterBallController : MonoBehaviour
     private Vector3 roadAttachmentTargetPosition;
     private Vector3 roadAttachmentUp = Vector3.up;
     private Vector3 roadAttachmentForward = Vector3.forward;
+
+    private bool hasMagneticBarrierInfluence;
+    private MagneticBarrierSplineDreamteck.BarrierInfluence currentBarrierInfluence;
 
     private RailGrindSplineDreamteck activeRailSpline;
     private RailGrindSplineDreamteck.RailSample activeRailSample;
@@ -381,7 +440,8 @@ public class HamsterBallController : MonoBehaviour
         if (roadSplineSampler == null)
             roadSplineSampler = FindAnyObjectByType<SplineSampler>();
 
-      
+        if (autoFindMagneticBarriers && (magneticBarrierSplines == null || magneticBarrierSplines.Length == 0))
+            magneticBarrierSplines = FindObjectsByType<MagneticBarrierSplineDreamteck>();
 
         if (railSplines == null || railSplines.Length == 0)
             railSplines = FindObjectsByType<RailGrindSplineDreamteck>();
@@ -456,9 +516,12 @@ public class HamsterBallController : MonoBehaviour
         }
 
         hasRoadAttachmentThisFrame = false;
+        hasMagneticBarrierInfluence = false;
         isGrounded = groundedTimer > 0f;
 
         RefreshRoadAttachment();
+        RefreshMagneticBarrierInfluence();
+        ApplyMagneticBarrierSteeringBlock();
 
 
         if (isRailGrinding)
@@ -477,6 +540,7 @@ public class HamsterBallController : MonoBehaviour
         ApplyDrive(dt);
         ApplyDirectionalGrip(dt);
         ApplyRoadAttachment(dt);
+        ApplyMagneticBarrierVelocityResponse(dt);
         UpdateFacingFromMovement();
         ApplyGroundStick();
         ApplyJumpGravity();
@@ -496,11 +560,12 @@ public class HamsterBallController : MonoBehaviour
             dashCooldownTimer = 0f;
     }
 
-  
+
 
     private void LateUpdate()
     {
         UpdateVisuals();
+        UpdateChainTargetPreview();
         UpdateRailSwitchPreviewObject();
     }
 
@@ -515,6 +580,12 @@ public class HamsterBallController : MonoBehaviour
             chainHitRoutine = null;
         }
 
+
+        if (previewedChainTarget != null)
+        {
+            previewedChainTarget.SetPreviewed(false);
+            previewedChainTarget = null;
+        }
 
         activeChainTarget = null;
         isChainDashing = false;
@@ -634,6 +705,31 @@ public class HamsterBallController : MonoBehaviour
         TriggerSharedSpeedCameraKick();
     }
 
+    private void UpdateChainTargetPreview()
+    {
+        ChainDashTarget newPreview = null;
+
+        if (!isChainDashing &&
+            !isInChainHitStop &&
+            !isRailGrinding &&
+            chainRetargetLockoutTimer <= 0f)
+        {
+            Vector3 aimForward = GetAttackAimForward();
+            newPreview = FindBestChainTargetFromDirection(aimForward);
+        }
+
+        if (previewedChainTarget == newPreview)
+            return;
+
+        if (previewedChainTarget != null)
+            previewedChainTarget.SetPreviewed(false);
+
+        previewedChainTarget = newPreview;
+
+        if (previewedChainTarget != null)
+            previewedChainTarget.SetPreviewed(true);
+    }
+
     private void HandleTargetAttack()
     {
         if (!attackPressed || IsDashing || railRelockTimer > 0f)
@@ -641,27 +737,10 @@ public class HamsterBallController : MonoBehaviour
 
         Vector3 aimForward = GetAttackAimForward();
 
-        ChainDashTarget chainTarget = FindBestChainTargetFromDirection(aimForward);
-
-        RailGrindSplineDreamteck railSpline = null;
-        RailGrindSplineDreamteck.RailSample railSample = default;
-        float bestRailScore = float.NegativeInfinity;
-
-        TryFindBestRailTarget(
-            transform.position,
-            aimForward,
-            out railSpline,
-            out railSample,
-            out bestRailScore
-        );
-
-        float chainScore = chainTarget != null ? ScoreChainTarget(chainTarget, aimForward) : float.NegativeInfinity;
-
-        if (railSpline != null && bestRailScore > chainScore)
-        {
-            StartRailGrind(railSpline, railSample);
-            return;
-        }
+        ChainDashTarget chainTarget =
+            previewedChainTarget != null && previewedChainTarget.CanBeTargeted()
+                ? previewedChainTarget
+                : FindBestChainTargetFromDirection(aimForward);
 
         if (chainTarget != null)
             StartChainDash(chainTarget);
@@ -1381,6 +1460,12 @@ public class HamsterBallController : MonoBehaviour
         if (!chainDashIgnoresLoveRequirement)
             SpendLoveForDash();
 
+        if (previewedChainTarget != null)
+        {
+            previewedChainTarget.SetPreviewed(false);
+            previewedChainTarget = null;
+        }
+
         activeChainTarget = target;
         isChainDashing = true;
         isInChainHitStop = false;
@@ -1428,6 +1513,53 @@ public class HamsterBallController : MonoBehaviour
         chainHitRoutine = StartCoroutine(ChainHitSequence(hitTarget));
     }
 
+    private void PlayChainImpactFrame(ChainDashTarget hitTarget, float hitStop)
+    {
+        if (hitTarget == null)
+            return;
+
+        // Target-local impact VFX can still happen when the player first reaches the enemy.
+        // This sells the "contact" moment before the launch-away flash.
+        if (chainImpactVfxBeforeLaunch)
+            hitTarget.PlayImpactVfxOnly();
+
+        // Camera hold / tension while frozen at the enemy.
+        if (followCamera != null)
+        {
+            if (hitStop > 0f)
+                followCamera.PlayAttackHitStopCamera(hitStop + 0.08f);
+        }
+    }
+
+    private void PlayChainLaunchFlash()
+    {
+        // Full-screen flash right as the player launches away.
+        if (chainImpactUseScreenFlash)
+        {
+            ImpactFlashUI.Play(
+                chainImpactFlashColor,
+                chainImpactFlashAlpha,
+                chainImpactFlashFadeTime
+            );
+        }
+
+        // Camera punch right as the player leaves the target.
+        if (followCamera != null)
+        {
+            followCamera.TriggerFovKick(
+                chainImpactFovKickAmount,
+                chainImpactFovKickHoldTime,
+                chainImpactFovKickInSpeed,
+                chainImpactFovKickOutSpeed
+            );
+
+            followCamera.TriggerShake(
+                chainImpactShakeDuration,
+                chainImpactShakeStrength
+            );
+        }
+    }
+
     private IEnumerator ChainHitSequence(ChainDashTarget hitTarget)
     {
         isInChainHitStop = true;
@@ -1436,18 +1568,30 @@ public class HamsterBallController : MonoBehaviour
         hitTarget.NotifyHit();
 
         Vector3 aimPos = hitTarget.GetAimPosition();
+
+        // Freeze the player right on the impact point.
         rb.position = aimPos;
         rb.linearVelocity = Vector3.zero;
         rb.angularVelocity = Vector3.zero;
 
+
         float hitStop = hitTarget.GetHitStopDuration();
 
-        if (followCamera != null && hitStop > 0f)
-            followCamera.PlayAttackHitStopCamera(hitStop + 0.08f);
+        // Arrival contact moment. Player freezes here, but the screen does not flash yet.
+        PlayChainImpactFrame(hitTarget, hitStop);
 
         if (hitStop > 0f)
             yield return new WaitForSeconds(hitStop);
 
+        // This is the launch-away impact frame.
+        // Flash happens here, right as the player leaves the enemy.
+        PlayChainLaunchFlash();
+
+        // If VFX are not played at the start of the freeze, play them right before launch.
+        if (!chainImpactVfxBeforeLaunch)
+            hitTarget.PlayImpactVfxOnly();
+
+        // Launch debris / impact objects at the same moment the player launches away.
         hitTarget.TriggerZoneImpact();
 
         Vector3 launchDir = hitTarget.GetLaunchDirection();
@@ -1465,7 +1609,12 @@ public class HamsterBallController : MonoBehaviour
         float playerRadius = 0.5f;
         if (sphereCol != null)
         {
-            float maxScale = Mathf.Max(transform.lossyScale.x, transform.lossyScale.y, transform.lossyScale.z);
+            float maxScale = Mathf.Max(
+                transform.lossyScale.x,
+                transform.lossyScale.y,
+                transform.lossyScale.z
+            );
+
             playerRadius = sphereCol.radius * maxScale;
         }
 
@@ -1489,19 +1638,11 @@ public class HamsterBallController : MonoBehaviour
         isGrounded = false;
         hasRoadAttachmentThisFrame = false;
 
-        activeChainTarget = null;
         chainRetargetLockoutTimer = chainRetargetLockoutDuration;
 
-        if (followCamera != null)
-            followCamera.PlayChainLaunchCameraJuice();
+        TriggerSharedSpeedCameraKick();
 
         chainHitRoutine = null;
-
-        if (followCamera != null)
-        {
-            followCamera.TriggerShake(0.28f, 0.18f);
-        }
-
     }
 
     private bool CanDash()
@@ -1526,6 +1667,261 @@ public class HamsterBallController : MonoBehaviour
             loveMeter.TrySpendLove(dashLoveCost);
     }
 
+    private void RefreshMagneticBarrierInfluence()
+    {
+        hasMagneticBarrierInfluence = false;
+        currentBarrierInfluence = default;
+
+        if (!useMagneticBarriers)
+            return;
+
+        if (isRailGrinding || isChainDashing || isInChainHitStop)
+            return;
+
+        float playerRadius = GetScaledPlayerRadius() + magneticBarrierPlayerRadiusPadding;
+
+        MagneticBarrierSplineDreamteck.BarrierInfluence bestInfluence = default;
+        float bestScore = 0f;
+        bool found = false;
+
+        // Prefer explicit inspector list.
+        if (magneticBarrierSplines != null && magneticBarrierSplines.Length > 0)
+        {
+            for (int i = 0; i < magneticBarrierSplines.Length; i++)
+            {
+                MagneticBarrierSplineDreamteck barrier = magneticBarrierSplines[i];
+                if (barrier == null || !barrier.isActiveAndEnabled)
+                    continue;
+
+                if (!barrier.TryGetInfluence(rb.position, playerRadius, out MagneticBarrierSplineDreamteck.BarrierInfluence influence))
+                    continue;
+
+                float score = influence.softStrength01 + influence.hardStrength01 * 2f;
+
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    bestInfluence = influence;
+                    found = true;
+                }
+            }
+        }
+        else
+        {
+            // Fallback to active registry.
+            for (int i = 0; i < MagneticBarrierSplineDreamteck.ActiveBarriers.Count; i++)
+            {
+                MagneticBarrierSplineDreamteck barrier = MagneticBarrierSplineDreamteck.ActiveBarriers[i];
+                if (barrier == null || !barrier.isActiveAndEnabled)
+                    continue;
+
+                if (!barrier.TryGetInfluence(rb.position, playerRadius, out MagneticBarrierSplineDreamteck.BarrierInfluence influence))
+                    continue;
+
+                float score = influence.softStrength01 + influence.hardStrength01 * 2f;
+
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    bestInfluence = influence;
+                    found = true;
+                }
+            }
+        }
+
+        if (!found)
+            return;
+
+        hasMagneticBarrierInfluence = true;
+        currentBarrierInfluence = bestInfluence;
+    }
+
+    private void ApplyMagneticBarrierSteeringBlock()
+    {
+        if (!hasMagneticBarrierInfluence)
+            return;
+
+        MagneticBarrierSplineDreamteck barrier = currentBarrierInfluence.barrier;
+        if (barrier == null)
+            return;
+
+        if (Mathf.Abs(steerInput) < 0.001f)
+            return;
+
+        Vector3 pushDirection = currentBarrierInfluence.pushDirection;
+        pushDirection.y = 0f;
+
+        if (pushDirection.sqrMagnitude < 0.0001f)
+            return;
+
+        pushDirection.Normalize();
+
+        Vector3 intoBarrier = -pushDirection;
+
+        Vector3 forward = GetForwardFromFacing();
+
+        float steerAngle = Mathf.Sign(steerInput) * GetCurrentSteerAngleDegrees();
+        Vector3 steeredDirection = Quaternion.AngleAxis(steerAngle, Vector3.up) * forward;
+        steeredDirection.y = 0f;
+
+        if (steeredDirection.sqrMagnitude < 0.0001f)
+            return;
+
+        steeredDirection.Normalize();
+
+        float forwardIntoAmount = Vector3.Dot(forward, intoBarrier);
+        float steeredIntoAmount = Vector3.Dot(steeredDirection, intoBarrier);
+
+        // Only block the input if steering makes us point more into the barrier.
+        if (steeredIntoAmount <= forwardIntoAmount)
+            return;
+
+        float blockAmount =
+            currentBarrierInfluence.softStrength01 *
+            barrier.blockSteeringIntoBarrier;
+
+        blockAmount = Mathf.Clamp01(blockAmount);
+
+        steerInput = Mathf.Lerp(steerInput, 0f, blockAmount);
+    }
+
+    private void ApplyMagneticBarrierVelocityResponse(float dt)
+    {
+        if (!hasMagneticBarrierInfluence)
+            return;
+
+        MagneticBarrierSplineDreamteck barrier = currentBarrierInfluence.barrier;
+        if (barrier == null)
+            return;
+
+        Vector3 pushDirection = currentBarrierInfluence.pushDirection;
+        pushDirection.y = 0f;
+
+        if (pushDirection.sqrMagnitude < 0.0001f)
+            return;
+
+        pushDirection.Normalize();
+
+        Vector3 intoBarrier = -pushDirection;
+
+        Vector3 velocity = rb.linearVelocity;
+        Vector3 horizontal = GetHorizontalVelocity();
+        float originalHorizontalSpeed = horizontal.magnitude;
+
+        // 1) Remove velocity that is driving into the barrier.
+        float intoSpeed = Vector3.Dot(horizontal, intoBarrier);
+        if (intoSpeed > 0f)
+        {
+            float removeAmount =
+                barrier.removeIntoBarrierVelocity *
+                currentBarrierInfluence.softStrength01;
+
+            horizontal -= intoBarrier * intoSpeed * Mathf.Clamp01(removeAmount);
+        }
+
+        // 2) Preserve speed by redirecting it along the barrier / forward flow.
+        if (originalHorizontalSpeed > 0.001f)
+        {
+            Vector3 glideDirection = GetBarrierGlideDirection(pushDirection, currentBarrierInfluence.barrierForward);
+            float desiredRetainedSpeed = originalHorizontalSpeed * barrier.forwardSpeedRetention;
+
+            float currentGlideSpeed = Vector3.Dot(horizontal, glideDirection);
+            if (currentGlideSpeed < desiredRetainedSpeed)
+            {
+                horizontal += glideDirection * (desiredRetainedSpeed - currentGlideSpeed);
+            }
+        }
+
+        rb.linearVelocity = new Vector3(horizontal.x, velocity.y, horizontal.z);
+
+        // 3) Add soft magnetic outward push.
+        rb.AddForce(
+            pushDirection * barrier.pushAcceleration * currentBarrierInfluence.softStrength01,
+            ForceMode.Acceleration
+        );
+
+        // 4) Clamp outward launch speed so the barrier does not become a cannon.
+        Vector3 afterPushHorizontal = GetHorizontalVelocity();
+        float outwardSpeed = Vector3.Dot(afterPushHorizontal, pushDirection);
+
+        if (outwardSpeed > barrier.maxOutwardSpeed)
+        {
+            afterPushHorizontal -= pushDirection * (outwardSpeed - barrier.maxOutwardSpeed);
+            rb.linearVelocity = new Vector3(afterPushHorizontal.x, rb.linearVelocity.y, afterPushHorizontal.z);
+        }
+
+        // 5) Hard anti-phase correction. This is the "you cannot keep forcing through this" layer.
+        if (currentBarrierInfluence.hardCorrectionDistance > 0f)
+        {
+            float correctionStep =
+                barrier.hardCorrectionSpeed *
+                currentBarrierInfluence.hardStrength01 *
+                dt;
+
+            correctionStep = Mathf.Min(correctionStep, currentBarrierInfluence.hardCorrectionDistance);
+
+            rb.MovePosition(rb.position + pushDirection * correctionStep);
+        }
+    }
+
+    private Vector3 GetBarrierGlideDirection(Vector3 pushDirection, Vector3 barrierForward)
+    {
+        Vector3 forward = GetForwardFromFacing();
+
+        forward.y = 0f;
+        pushDirection.y = 0f;
+        barrierForward.y = 0f;
+
+        if (forward.sqrMagnitude < 0.0001f)
+            forward = transform.forward;
+
+        forward.Normalize();
+
+        if (pushDirection.sqrMagnitude < 0.0001f)
+            pushDirection = Vector3.right;
+
+        pushDirection.Normalize();
+
+        // Remove the part of our desired forward that points into/out of the wall.
+        Vector3 glide = Vector3.ProjectOnPlane(forward, pushDirection);
+        glide.y = 0f;
+
+        if (glide.sqrMagnitude < 0.0001f)
+        {
+            glide = barrierForward;
+
+            if (glide.sqrMagnitude < 0.0001f)
+                glide = Vector3.Cross(Vector3.up, pushDirection);
+        }
+
+        glide.y = 0f;
+
+        if (glide.sqrMagnitude < 0.0001f)
+            glide = forward;
+
+        glide.Normalize();
+
+        // Pick the tangent direction that best agrees with current movement.
+        Vector3 horizontal = GetHorizontalVelocity();
+        if (horizontal.sqrMagnitude > 0.001f && Vector3.Dot(glide, horizontal) < 0f)
+            glide = -glide;
+
+        return glide;
+    }
+
+    private float GetScaledPlayerRadius()
+    {
+        if (sphereCol == null)
+            return 0.5f;
+
+        float maxScale = Mathf.Max(
+            transform.lossyScale.x,
+            transform.lossyScale.y,
+            transform.lossyScale.z
+        );
+
+        return sphereCol.radius * maxScale;
+    }
     private void RefreshRoadAttachment()
     {
         hasRoadAttachmentThisFrame = false;
@@ -1993,6 +2389,32 @@ public class HamsterBallController : MonoBehaviour
     private void OnDrawGizmos()
     {
         DrawRailSwitchDebug();
+        DrawMagneticBarrierDebug();
+    }
+
+    private void DrawMagneticBarrierDebug()
+    {
+        if (!drawCurrentMagneticBarrierDebug)
+            return;
+
+        if (!Application.isPlaying)
+            return;
+
+        if (!hasMagneticBarrierInfluence)
+            return;
+
+        Vector3 closest = currentBarrierInfluence.closestPoint;
+        Vector3 push = currentBarrierInfluence.pushDirection;
+
+        Gizmos.color = Color.cyan;
+        Gizmos.DrawSphere(closest, magneticBarrierDebugSphereRadius);
+        Gizmos.DrawLine(transform.position, closest);
+
+        Gizmos.color = Color.magenta;
+        Gizmos.DrawRay(transform.position, push.normalized * 2.0f);
+
+        Gizmos.color = Color.green;
+        Gizmos.DrawRay(closest, currentBarrierInfluence.barrierForward.normalized * 1.5f);
     }
 
     private void DrawRailSwitchDebug()
