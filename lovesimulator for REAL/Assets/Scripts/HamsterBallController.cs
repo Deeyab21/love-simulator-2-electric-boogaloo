@@ -124,6 +124,12 @@ public class HamsterBallController : MonoBehaviour
     [Tooltip("If true, steering input is ignored during free dash.")]
     public bool lockSteeringDuringDash = true;
 
+    [Tooltip("If true, free dash holds the player at the same Y height during the dash.")]
+    public bool freezeGravityDuringDash = true;
+
+    [Tooltip("If true, vertical velocity is restored after dash. If false, player resumes with 0 vertical speed.")]
+    public bool restoreVerticalVelocityAfterDash = false;
+
     [Header("Target Attack / Chain Dash")]
     [Tooltip("Layers searched when looking for chain dash targets.")]
     public LayerMask chainTargetLayers = ~0;
@@ -362,6 +368,10 @@ public class HamsterBallController : MonoBehaviour
     private bool jumpPressed;
     private bool dashPressed;
     private bool attackPressed;
+    private float storedDashYVelocity;
+    private bool wasDashGravityFrozen;
+    private Vector3 activeDashDirection;
+    private bool dashStartedInAir;
 
     private float facingYaw;
     private float jumpTimer;
@@ -408,6 +418,11 @@ public class HamsterBallController : MonoBehaviour
     private Vector3 railSwitchHopStartPos;
     private Vector3 railSwitchHopMidPos;
     private Vector3 railSwitchHopEndPos;
+
+    private bool wasGroundedLastFrame;
+    private float airborneStartY;
+    private float highestAirborneY;
+    private float lastDownwardSpeed;
 
     private Quaternion railSwitchHopStartRot;
     private Quaternion railSwitchHopEndRot;
@@ -485,6 +500,7 @@ public class HamsterBallController : MonoBehaviour
 
         float dt = Time.fixedDeltaTime;
 
+
         jumpTimer -= dt;
         jumpDetachTimer -= dt;
         groundedTimer -= dt;
@@ -554,10 +570,67 @@ public class HamsterBallController : MonoBehaviour
             isGrounded = false;
 
         if (dashTimer <= 0f)
+        {
+            if (wasDashGravityFrozen)
+            {
+                wasDashGravityFrozen = false;
+                dashStartedInAir = false;
+
+                if (restoreVerticalVelocityAfterDash)
+                {
+                    rb.linearVelocity = new Vector3(
+                        rb.linearVelocity.x,
+                        storedDashYVelocity,
+                        rb.linearVelocity.z
+                    );
+                }
+                else
+                {
+                    rb.linearVelocity = new Vector3(
+                        rb.linearVelocity.x,
+                        0f,
+                        rb.linearVelocity.z
+                    );
+                }
+            }
+
             dashTimer = 0f;
+        }
 
         if (dashCooldownTimer <= 0f)
             dashCooldownTimer = 0f;
+
+        UpdateLandingCameraBounce();
+    }
+
+    private void UpdateLandingCameraBounce()
+    {
+        bool groundedNow = isGrounded || hasRoadAttachmentThisFrame;
+
+        if (!groundedNow)
+        {
+            
+
+            highestAirborneY = Mathf.Max(highestAirborneY, rb.position.y);
+            lastDownwardSpeed = Mathf.Max(0f, -rb.linearVelocity.y);
+            wasGroundedLastFrame = false;
+            return;
+        }
+
+        if (!wasGroundedLastFrame)
+        {
+            float fallHeight = Mathf.Max(0f, highestAirborneY - rb.position.y);
+
+            // Combines actual downward speed and fall height.
+            // This lets big drops feel stronger even if road attachment softened velocity.
+            float heightBasedImpact = Mathf.Sqrt(fallHeight) * 8f;
+            float impactSpeed = Mathf.Max(lastDownwardSpeed, heightBasedImpact);
+
+            if (followCamera != null)
+                followCamera.PlayLandingBounce(impactSpeed);
+        }
+
+        wasGroundedLastFrame = true;
     }
 
 
@@ -688,6 +761,8 @@ public class HamsterBallController : MonoBehaviour
 
         SpendLoveForDash();
 
+        dashStartedInAir = !isGrounded && !hasRoadAttachmentThisFrame;
+
         Vector3 horizontal = GetHorizontalVelocity();
         Vector3 dashDirection = horizontal.sqrMagnitude > 0.001f
             ? horizontal.normalized
@@ -697,7 +772,17 @@ public class HamsterBallController : MonoBehaviour
         float targetSpeed = Mathf.Max(dashStartSpeed, currentSpeedAlongDash);
 
         Vector3 newHorizontal = dashDirection * targetSpeed;
-        rb.linearVelocity = new Vector3(newHorizontal.x, rb.linearVelocity.y, newHorizontal.z);
+
+        storedDashYVelocity = rb.linearVelocity.y;
+        wasDashGravityFrozen = dashStartedInAir;
+
+        float yVelocity = dashStartedInAir ? 0f : rb.linearVelocity.y;
+
+        rb.linearVelocity = new Vector3(
+            newHorizontal.x,
+            yVelocity,
+            newHorizontal.z
+        );
 
         dashTimer = dashDuration;
         dashCooldownTimer = dashCooldown;
@@ -2017,8 +2102,16 @@ public class HamsterBallController : MonoBehaviour
 
             Vector3 currentHorizontal = GetHorizontalVelocity();
             float dashSpeed = Mathf.Max(currentHorizontal.magnitude, dashStartSpeed);
+
             Vector3 redirected = desiredForward * dashSpeed;
-            rb.linearVelocity = new Vector3(redirected.x, rb.linearVelocity.y, redirected.z);
+
+            float yVelocity = dashStartedInAir ? 0f : rb.linearVelocity.y;
+
+            rb.linearVelocity = new Vector3(
+                redirected.x,
+                yVelocity,
+                redirected.z
+            );
         }
 
         if (!isUsingDashDrive)
@@ -2108,6 +2201,9 @@ public class HamsterBallController : MonoBehaviour
     private void ApplyJumpGravity()
     {
         if (isGrounded || isInChainHitStop || isRailGrinding)
+            return;
+
+        if (dashStartedInAir && dashTimer > 0f)
             return;
 
         float gravityToApply = rb.linearVelocity.y > 0f ? RiseGravity : FallGravity;

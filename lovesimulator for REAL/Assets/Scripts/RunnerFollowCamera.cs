@@ -45,6 +45,30 @@ public class RunnerFollowCamera : MonoBehaviour
     public float airborneLookAheadBonus = 0.4f;
     public float jumpSmoothSpeed = 5f;
 
+    [Header("Landing Bounce")]
+    public bool useLandingBounce = true;
+
+    [Tooltip("Minimum downward landing speed needed to trigger bounce.")]
+    public float landingMinFallSpeed = 8f;
+
+    [Tooltip("Downward speed that counts as maximum landing impact.")]
+    public float landingMaxFallSpeed = 45f;
+
+    [Tooltip("How much the camera dips down on a light landing.")]
+    public float landingMinDip = 0.08f;
+
+    [Tooltip("How much the camera dips down on a hard landing.")]
+    public float landingMaxDip = 0.65f;
+
+    [Tooltip("How much extra shake a hard landing adds.")]
+    public float landingMaxShake = 0.18f;
+
+    [Tooltip("How quickly the landing dip happens.")]
+    public float landingDipInSpeed = 28f;
+
+    [Tooltip("How quickly the camera returns after the dip.")]
+    public float landingRecoverSpeed = 10f;
+
     [Header("Speed Effects")]
     public bool useSpeedEffects = true;
     public float speedForMaxEffect = 35f;
@@ -121,6 +145,10 @@ public class RunnerFollowCamera : MonoBehaviour
 
     private float attackStopTimer;
     private float lockedAttackYaw;
+
+    private float landingBounceOffset;
+    private float landingBounceTarget;
+    private float landingRecoverTimer;
 
     private void Start()
     {
@@ -241,6 +269,7 @@ public class RunnerFollowCamera : MonoBehaviour
         }
 
         UpdateJumpJuice(ref currentFollowHeight, ref currentLookAheadDistance);
+        UpdateLandingBounce(ref currentFollowHeight);
         UpdateBanking();
 
         Quaternion yawRotation = Quaternion.Euler(0f, currentYaw, 0f);
@@ -285,6 +314,60 @@ public class RunnerFollowCamera : MonoBehaviour
             euler.y,
             currentBank
         );
+    }
+
+    public void PlayLandingBounce(float downwardSpeed)
+    {
+        if (!useLandingBounce)
+            return;
+
+        if (downwardSpeed < landingMinFallSpeed)
+            return;
+
+        float impact01 = Mathf.InverseLerp(
+            landingMinFallSpeed,
+            landingMaxFallSpeed,
+            downwardSpeed
+        );
+
+        impact01 = Mathf.Clamp01(impact01);
+
+        float dip = Mathf.Lerp(landingMinDip, landingMaxDip, impact01);
+
+        landingBounceTarget = -dip;
+        landingRecoverTimer = 0.08f;
+
+        if (useCameraShake && landingMaxShake > 0f)
+            TriggerShake(landingMaxShake * impact01, 0.10f + impact01 * 0.08f);
+    }
+
+    private void UpdateLandingBounce(ref float followHeight)
+    {
+        if (!useLandingBounce)
+            return;
+
+        if (landingRecoverTimer > 0f)
+        {
+            landingRecoverTimer -= Time.deltaTime;
+
+            landingBounceOffset = Mathf.Lerp(
+                landingBounceOffset,
+                landingBounceTarget,
+                landingDipInSpeed * Time.deltaTime
+            );
+        }
+        else
+        {
+            landingBounceTarget = 0f;
+
+            landingBounceOffset = Mathf.Lerp(
+                landingBounceOffset,
+                0f,
+                landingRecoverSpeed * Time.deltaTime
+            );
+        }
+
+        followHeight += landingBounceOffset;
     }
 
     public void PlayAttackHitStopCamera(float duration)
