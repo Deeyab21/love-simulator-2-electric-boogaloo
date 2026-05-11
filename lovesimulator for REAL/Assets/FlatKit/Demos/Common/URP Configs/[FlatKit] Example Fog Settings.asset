@@ -40,12 +40,12 @@ MonoBehaviour:
     atime6: 0
     atime7: 0
     m_Mode: 0
-    m_ColorSpace: -1
+    m_ColorSpace: 0
     m_NumColorKeys: 2
     m_NumAlphaKeys: 3
   near: 30
-  far: 150
-  distanceFogIntensity: 0.5
+  far: 1000
+  distanceFogIntensity: 0.2
   useHeight: 1
   heightGradient:
     serializedVersion: 2
@@ -77,10 +77,10 @@ MonoBehaviour:
     m_ColorSpace: -1
     m_NumColorKeys: 3
     m_NumAlphaKeys: 3
-  low: 5
-  high: 35
-  heightFogIntensity: 0.5
-  cameraRelativePosition: 0
+  low: 1
+  high: 1000
+  heightFogIntensity: 0.2
+  cameraRelativePosition: 1
   distanceHeightBlend: 0.5
   renderEvent: 550
   applyInSceneView: 1
@@ -93,11 +93,11 @@ Material:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_Name: Effect Material
-  m_Shader: {fileID: -6465566751694194690, guid: c77db07224d9f784d90d7eb0e84c57f7,
-    type: 3}
+  m_Shader: {fileID: -6465566751694194690, guid: c77db07224d9f784d90d7eb0e84c57f7, type: 3}
   m_Parent: {fileID: 0}
   m_ModifiedSerializedProperties: 0
   m_ValidKeywords:
+  - FOG_CAMERA_RELATIVE
   - USE_DISTANCE_FOG
   - USE_HEIGHT_FOG
   m_InvalidKeywords: []
@@ -133,12 +133,12 @@ Material:
         m_Offset: {x: 0, y: 0}
     m_Ints: []
     m_Floats:
-    - _DistanceFogIntensity: 0.5
+    - _DistanceFogIntensity: 0.2
     - _DistanceHeightBlend: 0.5
-    - _Far: 150
-    - _HeightFogIntensity: 0.5
-    - _HighWorldY: 35
-    - _LowWorldY: 5
+    - _Far: 1000
+    - _HeightFogIntensity: 0.2
+    - _HighWorldY: 1000
+    - _LowWorldY: 1
     - _Near: 30
     m_Colors: []
   m_BuildTextureStacks: []

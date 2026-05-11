@@ -27,6 +27,7 @@ Material:
   m_ValidKeywords:
   - _COLORMODE_LINEAR
   - _FOAMMODE_TEXTURE
+  - _NOISESOURCE_WORLD_SPACE
   - _WAVEMODE_GRID
   m_InvalidKeywords:
   - _ALLOWALPHAOVERFLOW_OFF
@@ -89,26 +90,26 @@ Material:
     - _CameraDistanceFadeClose: 0
     - _CameraDistanceFadeFar: 10
     - _ColorMode: 0
-    - _CrestSharpness: 0.32
+    - _CrestSharpness: 0.581
     - _CrestSize: 0.76
     - _Cull: 2
     - _Cutoff: 0.5
     - _Depth: 100
     - _DstBlend: 0
     - _EnvironmentReflections: 1
-    - _FadeDistance: 0.19
-    - _FoamAmount: 0.217
+    - _FadeDistance: 9.4
+    - _FoamAmount: 0.48
     - _FoamDepth: 0.09
-    - _FoamDirection: -0.12
+    - _FoamDirection: 0.12
     - _FoamFromTexture: 1
     - _FoamMode: 2
-    - _FoamNoiseAmount: 0
+    - _FoamNoiseAmount: 1
     - _FoamProcedural: 1
-    - _FoamScale: 0.176
-    - _FoamSharpness: 0.596
-    - _FoamSpeed: 0.26
-    - _FoamStretchX: 1
-    - _FoamStretchY: 2.8
+    - _FoamScale: 1.07
+    - _FoamSharpness: 0.432
+    - _FoamSpeed: -0.18
+    - _FoamStretchX: 5
+    - _FoamStretchY: 5
     - _FoamTexture: 1
     - _Frequency: 0.08
     - _GlossMapScale: 0
@@ -116,17 +117,18 @@ Material:
     - _GlossyReflections: 0
     - _LightContribution: 0
     - _Metallic: 0
+    - _NoiseSource: 1
     - _OcclusionStrength: 1
     - _Opaque: 0
     - _ProceduralFoam: 1
     - _QueueOffset: 0
     - _ReceiveShadows: 1
-    - _RefractionAmplitude: 0.001
-    - _RefractionFrequency: 9.52
-    - _RefractionScale: 3
+    - _RefractionAmplitude: 0.0237
+    - _RefractionFrequency: 1
+    - _RefractionScale: 0.2
     - _RefractionSpeed: 0.49
     - _RefractionStrength: 0.01
-    - _ShadowStrength: 0.02
+    - _ShadowStrength: 0
     - _Smoothness: 0.5
     - _SmoothnessTextureChannel: 0
     - _SpecularHighlights: 1
@@ -135,11 +137,11 @@ Material:
     - _Surface: 0
     - _UvFadeX: 0.1
     - _UvFadeY: 0.1
-    - _WaterClearness: 0.047
-    - _WaterDepth: 2.88
-    - _WaveAmplitude: 0.25
-    - _WaveDirection: 0
-    - _WaveFrequency: 50
+    - _WaterClearness: 0
+    - _WaterDepth: 16.18
+    - _WaveAmplitude: 15
+    - _WaveDirection: -0.57
+    - _WaveFrequency: 8.1
     - _WaveMode: 2
     - _WaveNoise: 0.01
     - _WaveSpeed: 0.5
@@ -156,3 +158,4 @@ Material:
     - _FoamStretch: {r: 1, g: 1, b: 1, a: 1}
     - _SpecColor: {r: 0.19999996, g: 0.19999996, b: 0.19999996, a: 1}
   m_BuildTextureStacks: []
+  m_AllowLocking: 1

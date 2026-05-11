@@ -17,6 +17,7 @@ Material:
   - _GRADIENTSPACE_WORLD
   - _OUTLINESPACE_SCREEN
   - _TEXTUREBLENDINGMODE_MULTIPLY
+  - _UNITYSHADOW_OCCLUSION
   m_InvalidKeywords:
   - _BLEND_MODE_MULTIPLY
   - _TYPE_B
@@ -51,7 +52,7 @@ Material:
     - _ShadowEdgeSize: 0.071
     - _ShadowEdgeSizeExtra: 0
     - _UnityShadowMode: 0
-    - _UnityShadowOcclusion: 0
+    - _UnityShadowOcclusion: 1
     - _UnityShadowPower: 0.093
     - _UnityShadowSharpness: 7.76
     m_Colors:

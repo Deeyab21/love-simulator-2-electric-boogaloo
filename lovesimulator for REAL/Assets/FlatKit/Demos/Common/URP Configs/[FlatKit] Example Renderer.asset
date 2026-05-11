@@ -26,7 +26,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 770acbaed70db4ad696458511aa3f084, type: 3}
   m_Name: FlatKitFog
   m_EditorClassIdentifier: 
-  m_Active: 0
+  m_Active: 1
   settings: {fileID: 11400000, guid: f68defe9b6889484787a8d20c715e802, type: 2}
 --- !u!114 &-649172821750606276
 MonoBehaviour:
@@ -40,16 +40,16 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: f62c9c65cf3354c93be831c8bc075510, type: 3}
   m_Name: ScreenSpaceAmbientOcclusion
   m_EditorClassIdentifier: Unity.RenderPipelines.Universal.Runtime::UnityEngine.Rendering.Universal.ScreenSpaceAmbientOcclusion
-  m_Active: 1
+  m_Active: 0
   m_Settings:
     AOMethod: 1
     Downsample: 1
     AfterOpaque: 0
     Source: 1
     NormalSamples: 1
-    Intensity: 2.4
+    Intensity: 0.26
     DirectLightingStrength: 0.408
-    Radius: 1.32
+    Radius: 0.33
     Samples: 2
     BlurQuality: 0
     Falloff: 100
@@ -82,7 +82,8 @@ MonoBehaviour:
   - {fileID: -1344586528338988631}
   - {fileID: -2401278517541482506}
   - {fileID: -649172821750606276}
-  m_RendererFeatureMap: a9319428ad1157edf6cf292be9f1acde3c96b711c2acfdf6
+  - {fileID: 1099419007265324661}
+  m_RendererFeatureMap: a9319428ad1157edf6cf292be9f1acde3c96b711c2acfdf675be5c1bc3eb410f
   m_UseNativeRenderPass: 0
   xrSystemData: {fileID: 11400000, guid: 60e1133243b97e347b653163a8c01b64, type: 2}
   postProcessData: {fileID: 11400000, guid: 41439944d30ece34e96484bdb6645b55, type: 2}
@@ -111,3 +112,17 @@ MonoBehaviour:
   m_DepthTextureFormat: 0
   m_AccurateGbufferNormals: 0
   m_IntermediateTextureMode: 1
+--- !u!114 &1099419007265324661
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: edb250ac097f481fa89c38a1e224b773, type: 3}
+  m_Name: FlatKitPixelation
+  m_EditorClassIdentifier: Unity.RenderPipelines.Universal.Runtime::FlatKit.FlatKitPixelation
+  m_Active: 0
+  settings: {fileID: 11400000, guid: c472facfb9eceae4ebca89f811c42f20, type: 2}
