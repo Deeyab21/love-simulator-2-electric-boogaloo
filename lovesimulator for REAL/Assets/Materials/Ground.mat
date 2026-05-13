@@ -8,20 +8,21 @@ Material:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_Name: Ground
-  m_Shader: {fileID: 4800000, guid: bee44b4a58655ee4cbff107302a3e131, type: 3}
+  m_Shader: {fileID: 4800000, guid: da4ea10875b1e854abe92db3e9cd4394, type: 3}
   m_Parent: {fileID: 2100000, guid: cb63cddbd034d63489cbe8be16ec0a1b, type: 2}
   m_ModifiedSerializedProperties: 0
-  m_ValidKeywords:
+  m_ValidKeywords: []
+  m_InvalidKeywords:
+  - _BLEND_MODE_MULTIPLY
   - _CELPRIMARYMODE_SINGLE
   - _DETAILMAPBLENDINGMODE_MULTIPLY
   - _GRADIENTSPACE_WORLD
   - _OUTLINESPACE_SCREEN
+  - _RECEIVEREALSHADOWS_ON
   - _TEXTUREBLENDINGMODE_MULTIPLY
-  - _UNITYSHADOW_OCCLUSION
-  m_InvalidKeywords:
-  - _BLEND_MODE_MULTIPLY
   - _TYPE_B
   - _UNITYSHADOWMODE_NONE
+  - _UNITYSHADOW_OCCLUSION
   m_LightmapFlags: 4
   m_EnableInstancingVariants: 0
   m_DoubleSidedGI: 0
@@ -56,7 +57,7 @@ Material:
     - _UnityShadowPower: 0.093
     - _UnityShadowSharpness: 7.76
     m_Colors:
-    - _BaseColor: {r: 0.8679245, g: 0.67792845, b: 0.52812386, a: 1}
+    - _BaseColor: {r: 0.7735849, g: 0.5882504, b: 0.44152722, a: 1}
     - _ColorDim: {r: 0.5849056, g: 0.45552164, b: 0.32831967, a: 1}
     - _ColorDimExtra: {r: 0.6886792, g: 0.48014984, b: 0.32809716, a: 1}
     - _ColorGradient: {r: 0.7830189, g: 0.32498598, b: 0.21791564, a: 1}

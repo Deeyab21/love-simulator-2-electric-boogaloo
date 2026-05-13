@@ -8,19 +8,18 @@ Material:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_Name: Ground 1
-  m_Shader: {fileID: 4800000, guid: bee44b4a58655ee4cbff107302a3e131, type: 3}
+  m_Shader: {fileID: 4800000, guid: da4ea10875b1e854abe92db3e9cd4394, type: 3}
   m_Parent: {fileID: 2100000, guid: cb63cddbd034d63489cbe8be16ec0a1b, type: 2}
   m_ModifiedSerializedProperties: 0
-  m_ValidKeywords:
+  m_ValidKeywords: []
+  m_InvalidKeywords:
+  - DR_ENABLE_LIGHTMAP_DIR
   - _CELPRIMARYMODE_SINGLE
   - _DETAILMAPBLENDINGMODE_MULTIPLY
   - _GRADIENTSPACE_WORLD
   - _OUTLINESPACE_SCREEN
+  - _RECEIVEREALSHADOWS_ON
   - _TEXTUREBLENDINGMODE_MULTIPLY
-  - _UNITYSHADOW_OCCLUSION
-  m_InvalidKeywords:
-  - _BLEND_MODE_MULTIPLY
-  - _TYPE_B
   - _UNITYSHADOWMODE_NONE
   m_LightmapFlags: 4
   m_EnableInstancingVariants: 0
@@ -34,35 +33,40 @@ Material:
   m_LockedProperties: 
   m_SavedProperties:
     serializedVersion: 3
-    m_TexEnvs: []
+    m_TexEnvs:
+    - _BaseMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
     m_Ints: []
     m_Floats:
+    - _AmbientStrength: 0.85
     - _CelExtraEnabled: 0
-    - _FlatRimEdgeSmoothness: 0
-    - _FlatRimLightAlign: 0.715
-    - _FlatRimSize: 0
-    - _Flatness: 1
+    - _FlatRimEdgeSmoothness: 0.5
+    - _FlatRimLightAlign: 0.31
+    - _FlatRimSize: 0.149
+    - _Flatness: 0.633
     - _FlatnessExtra: 1
-    - _GradientSize: 5.2
-    - _OutlineDepthOffset: 0.186
-    - _OutlineScale: 0.16
-    - _OutlineWidth: 1.8
-    - _SelfShadingSize: 0.615
-    - _SelfShadingSizeExtra: 0.606
-    - _ShadowEdgeSize: 0.071
-    - _ShadowEdgeSizeExtra: 0
+    - _GradientSize: 10
+    - _OutlineDepthOffset: 0
+    - _OutlineScale: 1
+    - _OutlineWidth: 1
+    - _SelfShadingSize: 0.638
+    - _SelfShadingSizeExtra: 0.6
+    - _ShadowEdgeSize: 0
+    - _ShadowEdgeSizeExtra: 0.05
     - _UnityShadowMode: 0
-    - _UnityShadowOcclusion: 1
-    - _UnityShadowPower: 0.093
-    - _UnityShadowSharpness: 7.76
+    - _UnityShadowOcclusion: 0
+    - _UnityShadowPower: 0.2
+    - _UnityShadowSharpness: 1
     m_Colors:
-    - _BaseColor: {r: 0.7169812, g: 0.7169812, b: 0.7169812, a: 1}
-    - _ColorDim: {r: 0.16981131, g: 0.16981131, b: 0.16981131, a: 1}
-    - _ColorDimExtra: {r: 0.6886792, g: 0.48014984, b: 0.32809716, a: 1}
-    - _ColorGradient: {r: 0.7830189, g: 0.32498598, b: 0.21791564, a: 1}
-    - _FlatRimColor: {r: 0, g: 0, b: 0, a: 1}
-    - _OutlineColor: {r: 0, g: 0, b: 0, a: 1}
-    - _UnityShadowColor: {r: 0.49056602, g: 0.2971189, b: 0.13652545, a: 1}
+    - _BaseColor: {r: 0.6226415, g: 0.4106539, b: 0.24377, a: 1}
+    - _ColorDim: {r: 0, g: 0, b: 0, a: 1}
+    - _ColorDimExtra: {r: 1, g: 1, b: 1, a: 1}
+    - _ColorGradient: {r: 0.85023, g: 0.85034, b: 0.85045, a: 0.85056}
+    - _FlatRimColor: {r: 0.27787295, g: 0.5188679, b: 0.2667764, a: 1}
+    - _OutlineColor: {r: 1, g: 1, b: 1, a: 1}
+    - _UnityShadowColor: {r: 0.85023, g: 0.85034, b: 0.8504499, a: 0.85056}
   m_BuildTextureStacks: []
   m_AllowLocking: 1
 --- !u!114 &6523091072300481076

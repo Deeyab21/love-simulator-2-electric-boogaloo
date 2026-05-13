@@ -11,9 +11,7 @@ Material:
   m_Shader: {fileID: -6465566751694194690, guid: f968e7540d632cc40b5ca8b340a3e718, type: 3}
   m_Parent: {fileID: 0}
   m_ModifiedSerializedProperties: 0
-  m_ValidKeywords:
-  - OUTLINE_USE_COLOR
-  - OUTLINE_USE_NORMALS
+  m_ValidKeywords: []
   m_InvalidKeywords: []
   m_LightmapFlags: 4
   m_EnableInstancingVariants: 0
@@ -39,8 +37,8 @@ Material:
         m_Offset: {x: 0, y: 0}
     m_Ints: []
     m_Floats:
-    - _ColorThresholdMax: 0.25
-    - _ColorThresholdMin: 0
+    - _ColorThresholdMax: 5.34
+    - _ColorThresholdMin: 4.56
     - _DepthThresholdMax: 0.1
     - _DepthThresholdMin: 0.1
     - _FadeRangeEnd: 500
@@ -73,12 +71,12 @@ MonoBehaviour:
   useDepth: 0
   minDepthThreshold: 0.1
   maxDepthThreshold: 0.1
-  useNormals: 1
+  useNormals: 0
   minNormalsThreshold: 0
   maxNormalsThreshold: 2
-  useColor: 1
-  minColorThreshold: 0
-  maxColorThreshold: 0.25
+  useColor: 0
+  minColorThreshold: 4.56
+  maxColorThreshold: 5.34
   renderEvent: 500
   outlineOnly: 0
   applyInSceneView: 1
