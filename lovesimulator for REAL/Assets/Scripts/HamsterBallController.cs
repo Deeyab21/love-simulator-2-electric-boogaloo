@@ -27,8 +27,7 @@ public class HamsterBallController : MonoBehaviour
     [Tooltip("Input reader for move / jump / dash / attack.")]
     public PlayerGameplayInput gameplayInput;
 
-    [Tooltip("Spline sampler used as the source of truth for road attachment.")]
-    public SplineSampler roadSplineSampler;
+
 
     [Header("Forward Movement")]
     [Tooltip("How strongly the player is pushed forward every physics step.")]
@@ -93,11 +92,14 @@ public class HamsterBallController : MonoBehaviour
     [Tooltip("Minimum time between jumps.")]
     public float jumpCooldown = 0.10f;
 
-    [Tooltip("How much the jump follows the ground normal instead of straight up.")]
-    [Range(0f, 1f)] public float jumpFromGroundNormalPercent = 0.55f;
+    [Tooltip("How long ground probing is disabled after jumping so the player actually leaves the road.")]
+    public float jumpDetachTime = 0.14f;
 
-    [Tooltip("How long ground stick is disabled after jumping.")]
-    public float jumpDetachTime = 0.10f;
+    [Tooltip("Small extra position push away from the road normal when jumping. Helps prevent instant re-grounding on slopes.")]
+    public float jumpSurfaceExitOffset = 0.08f;
+
+    [Tooltip("If true, jump uses the current visual/player local up when available. If false, it uses the last road normal.")]
+    public bool jumpUsesVisualLocalUp = true;
 
     [Header("Free Dash")]
     [Tooltip("If true, the love meter must be full to dash.")]
@@ -309,40 +311,49 @@ public class HamsterBallController : MonoBehaviour
     [Tooltip("How long grounded state lingers after losing contact.")]
     public float groundedMemory = 0.10f;
 
-    [Header("Ground Stick")]
-    [Tooltip("Downward force used to keep the player attached to the ground.")]
-    public float groundStickForce = 35f;
 
-    [Tooltip("Extra grace period where ground stick still applies after losing contact.")]
-    public float groundStickGraceTime = 0.12f;
+    [Header("Ground Probe")]
+    [Tooltip("Layers the player can treat as ground for smooth running.")]
+    public LayerMask groundProbeLayers;
 
-    [Tooltip("Maximum upward-away speed that ground stick is allowed to cancel.")]
-    public float maxStickAwaySpeed = 6f;
+    [Tooltip("Radius of the sphere cast used to detect the ground. Usually slightly smaller than the player's sphere collider radius.")]
+    public float groundProbeRadius = 0.42f;
 
-    [Header("Road Attachment")]
-    [Tooltip("If true, the spline road is used to keep the player attached during normal running.")]
-    public bool useRoadAttachment = true;
+    [Tooltip("How far above the player center the ground probe starts.")]
+    public float groundProbeStartOffset = 0.35f;
 
-    [Tooltip("How many spline segments are checked when finding the nearest road sample.")]
-    public int roadAttachmentSearchResolution = 28;
+    [Tooltip("How far downward the ground probe checks.")]
+    public float groundProbeDistance = 1.35f;
 
-    [Tooltip("How close the player must be to the road before road attachment can activate.")]
-    public float roadAttachmentCatchDistance = 2.25f;
+    [Tooltip("Small distance to keep the player above the detected ground point.")]
+    public float groundSkin = 0.04f;
 
-    [Tooltip("Small hover offset above the road while attached.")]
-    public float roadAttachmentHoverOffset = 0.03f;
+    [Tooltip("How quickly the player's center is corrected onto the smooth ground height while grounded.")]
+    public float groundHeightCorrectionSpeed = 55f;
 
-    [Tooltip("Keeps the player slightly inside the road edge instead of exactly on the outermost width.")]
-    public float roadAttachmentWidthPadding = 0.15f;
+    [Tooltip("How quickly the ground normal smooths on slopes/banks.")]
+    public float groundNormalSmoothSpeed = 18f;
 
-    [Tooltip("How quickly the player is moved back onto the road along the road normal.")]
-    public float roadAttachmentSnapSpeed = 45f;
+    [Tooltip("If true, draw the ground probe ray/sphere hit in scene view.")]
+    public bool drawGroundProbeDebug = true;
 
-    [Tooltip("If the player is moving away from the road faster than this, attachment waits.")]
-    public float roadAttachmentMaxCatchAwaySpeed = 2.5f;
+    [Header("Ground Probe Anti-Tunnel")]
+    [Tooltip("Extra ground check distance used when moving fast, falling, or dashing into slopes.")]
+    public float groundProbeSpeedDistanceMultiplier = 0.035f;
 
-    [Tooltip("Maximum speed allowed into the road while attached.")]
-    public float roadAttachmentMaxIntoRoadSpeed = 8f;
+    [Tooltip("Maximum extra probe distance added from speed.")]
+    public float groundProbeMaxExtraDistance = 4.0f;
+
+    [Tooltip("If grounded recently, allow the player to snap back to ground within this time.")]
+    public float groundSnapMemory = 0.16f;
+
+    [Tooltip("Maximum distance the player can be corrected to the ground in one physics step.")]
+    public float maxGroundCorrectionPerStep = 2.0f;
+
+    [Tooltip("Extra upward safety offset when resolving ground after fast impacts.")]
+    public float groundImpactSkin = 0.10f;
+
+ 
 
     [Header("Visuals")]
     [Tooltip("Vertical offset for the visual model.")]
@@ -357,6 +368,12 @@ public class HamsterBallController : MonoBehaviour
     [Tooltip("Minimum movement speed before the visual model starts using live travel direction.")]
     public float minVisualSpeedForFacing = 0.75f;
 
+    [Tooltip("If true, the player keeps the slope angle it jumped from while airborne.")]
+    public bool holdJumpVisualAngleUntilGrounded = true;
+
+    [Tooltip("How quickly the visual up direction changes when grounded again.")]
+    public float groundedVisualUpSmooth = 18f;
+
     [Header("Debug")]
     [Tooltip("If true, draws on-screen speed debug.")]
     public bool showSpeedDebug = true;
@@ -370,14 +387,12 @@ public class HamsterBallController : MonoBehaviour
     private bool attackPressed;
     private float storedDashYVelocity;
     private bool wasDashGravityFrozen;
-    private Vector3 activeDashDirection;
     private bool dashStartedInAir;
 
     private float facingYaw;
     private float jumpTimer;
     private float jumpDetachTimer;
     private float groundedTimer;
-    private float stickGraceTimer;
 
     private float dashTimer;
     private float dashCooldownTimer;
@@ -387,6 +402,8 @@ public class HamsterBallController : MonoBehaviour
 
     private Vector3 smoothedVisualForward = Vector3.forward;
     private Vector3 lastStableMoveDirection = Vector3.forward;
+    private Vector3 smoothedVisualUp = Vector3.up;
+    private Vector3 heldAirborneVisualUp = Vector3.up;
 
 
     private ChainDashTarget activeChainTarget;
@@ -396,10 +413,7 @@ public class HamsterBallController : MonoBehaviour
     private Coroutine chainHitRoutine;
     private float chainRetargetLockoutTimer;
 
-    private bool hasRoadAttachmentThisFrame;
-    private Vector3 roadAttachmentTargetPosition;
-    private Vector3 roadAttachmentUp = Vector3.up;
-    private Vector3 roadAttachmentForward = Vector3.forward;
+  
 
     private bool hasMagneticBarrierInfluence;
     private MagneticBarrierSplineDreamteck.BarrierInfluence currentBarrierInfluence;
@@ -414,6 +428,13 @@ public class HamsterBallController : MonoBehaviour
     private GameObject railSwitchPreviewInstance;
     private bool isRailSwitchHopping;
     private float railSwitchHopTimer;
+
+    private bool hasGroundProbe;
+    private Vector3 probedGroundPoint;
+    private Vector3 probedGroundNormal = Vector3.up;
+    private Vector3 smoothedGroundNormal = Vector3.up;
+    private float groundProbeDistanceThisFrame;
+    private float groundSnapTimer;
 
     private Vector3 railSwitchHopStartPos;
     private Vector3 railSwitchHopMidPos;
@@ -452,9 +473,6 @@ public class HamsterBallController : MonoBehaviour
         if (gameplayInput == null)
             gameplayInput = GetComponent<PlayerGameplayInput>();
 
-        if (roadSplineSampler == null)
-            roadSplineSampler = FindAnyObjectByType<SplineSampler>();
-
         if (autoFindMagneticBarriers && (magneticBarrierSplines == null || magneticBarrierSplines.Length == 0))
             magneticBarrierSplines = FindObjectsByType<MagneticBarrierSplineDreamteck>();
 
@@ -470,6 +488,8 @@ public class HamsterBallController : MonoBehaviour
         startForward.Normalize();
         smoothedVisualForward = startForward;
         lastStableMoveDirection = startForward;
+        smoothedVisualUp = Vector3.up;
+        heldAirborneVisualUp = Vector3.up;
     }
 
     private void Update()
@@ -496,20 +516,17 @@ public class HamsterBallController : MonoBehaviour
 
     private void FixedUpdate()
     {
-
-
         float dt = Time.fixedDeltaTime;
-
 
         jumpTimer -= dt;
         jumpDetachTimer -= dt;
         groundedTimer -= dt;
-        stickGraceTimer -= dt;
         dashTimer -= dt;
         dashCooldownTimer -= dt;
         chainRetargetLockoutTimer -= dt;
         railSwitchCooldownTimer -= dt;
         railRelockTimer -= dt;
+        groundSnapTimer -= dt;
 
         if (chainRetargetLockoutTimer < 0f)
             chainRetargetLockoutTimer = 0f;
@@ -519,6 +536,9 @@ public class HamsterBallController : MonoBehaviour
 
         if (railRelockTimer < 0f)
             railRelockTimer = 0f;
+
+        if (groundSnapTimer < 0f)
+            groundSnapTimer = 0f;
 
         CheckRespawn();
 
@@ -531,14 +551,14 @@ public class HamsterBallController : MonoBehaviour
             return;
         }
 
-        hasRoadAttachmentThisFrame = false;
         hasMagneticBarrierInfluence = false;
         isGrounded = groundedTimer > 0f;
 
-        RefreshRoadAttachment();
+        ProbeGround(dt);
+        ResolveGroundedMovement(dt);
+
         RefreshMagneticBarrierInfluence();
         ApplyMagneticBarrierSteeringBlock();
-
 
         if (isRailGrinding)
         {
@@ -555,10 +575,12 @@ public class HamsterBallController : MonoBehaviour
 
         ApplyDrive(dt);
         ApplyDirectionalGrip(dt);
-        ApplyRoadAttachment(dt);
         ApplyMagneticBarrierVelocityResponse(dt);
         UpdateFacingFromMovement();
-        ApplyGroundStick();
+
+        // Do NOT call old ApplyRoadAttachment or ApplyGroundStick here.
+        // The ground probe is now the ground authority.
+
         ApplyJumpGravity();
         HandleJump();
 
@@ -566,7 +588,7 @@ public class HamsterBallController : MonoBehaviour
         dashPressed = false;
         attackPressed = false;
 
-        if (groundedTimer <= 0f && !hasRoadAttachmentThisFrame)
+        if (groundedTimer <= 0f && !hasGroundProbe)
             isGrounded = false;
 
         if (dashTimer <= 0f)
@@ -605,8 +627,7 @@ public class HamsterBallController : MonoBehaviour
 
     private void UpdateLandingCameraBounce()
     {
-        bool groundedNow = isGrounded || hasRoadAttachmentThisFrame;
-
+        bool groundedNow = isGrounded || hasGroundProbe;
         if (!groundedNow)
         {
             
@@ -664,7 +685,7 @@ public class HamsterBallController : MonoBehaviour
         isChainDashing = false;
         isInChainHitStop = false;
         chainRetargetLockoutTimer = 0f;
-        hasRoadAttachmentThisFrame = false;
+         
 
         isRailGrinding = false;
         activeRailSpline = null;
@@ -695,7 +716,6 @@ public class HamsterBallController : MonoBehaviour
 
         isGrounded = false;
         groundedTimer = 0f;
-        stickGraceTimer = 0f;
         jumpDetachTimer = 0f;
         dashTimer = 0f;
         dashCooldownTimer = 0f;
@@ -719,8 +739,52 @@ public class HamsterBallController : MonoBehaviour
         if (forward.sqrMagnitude < 0.001f)
             forward = Vector3.forward;
 
-        forward.Normalize();
-        return forward;
+        return forward.normalized;
+    }
+    private Vector3 GetCurrentTurnUp()
+    {
+        if (isRailGrinding)
+        {
+            if (activeRailSample.up.sqrMagnitude > 0.001f)
+                return activeRailSample.up.normalized;
+        }
+
+        if (visualRoot != null && visualRoot.up.sqrMagnitude > 0.001f)
+            return visualRoot.up.normalized;
+
+        if ((isGrounded || hasGroundProbe) && lastGroundNormal.sqrMagnitude > 0.001f)
+            return lastGroundNormal.normalized;
+
+        if (smoothedGroundNormal.sqrMagnitude > 0.001f)
+            return smoothedGroundNormal.normalized;
+
+        return Vector3.up;
+    }
+
+    private Vector3 GetCurrentTurnForward()
+    {
+        Vector3 turnUp = GetCurrentTurnUp();
+
+        if (visualRoot != null)
+        {
+            Vector3 visualForward = Vector3.ProjectOnPlane(visualRoot.forward, turnUp);
+
+            if (visualForward.sqrMagnitude > 0.001f)
+                return visualForward.normalized;
+        }
+
+        Vector3 velocityForward = Vector3.ProjectOnPlane(rb.linearVelocity, turnUp);
+
+        if (velocityForward.sqrMagnitude > 0.001f)
+            return velocityForward.normalized;
+
+        Vector3 fallback = Quaternion.Euler(0f, facingYaw, 0f) * Vector3.forward;
+        fallback = Vector3.ProjectOnPlane(fallback, turnUp);
+
+        if (fallback.sqrMagnitude > 0.001f)
+            return fallback.normalized;
+
+        return Vector3.forward;
     }
 
     private Vector3 GetBiasedMoveDirection()
@@ -728,6 +792,9 @@ public class HamsterBallController : MonoBehaviour
         Vector3 forward = GetForwardFromFacing();
         float steerAngle = steerInput * GetCurrentSteerAngleDegrees();
 
+        // IMPORTANT:
+        // Steering happens around world up, not road normal.
+        // This keeps left/right feeling identical on slopes.
         Vector3 moveDir = Quaternion.AngleAxis(steerAngle, Vector3.up) * forward;
         moveDir.y = 0f;
 
@@ -743,10 +810,15 @@ public class HamsterBallController : MonoBehaviour
             return;
 
         Vector3 horizontal = GetHorizontalVelocity();
+
         if (horizontal.sqrMagnitude < (minSpeedToUpdateFacing * minSpeedToUpdateFacing))
             return;
 
         horizontal.y = 0f;
+
+        if (horizontal.sqrMagnitude < 0.001f)
+            return;
+
         horizontal.Normalize();
         facingYaw = Mathf.Atan2(horizontal.x, horizontal.z) * Mathf.Rad2Deg;
     }
@@ -761,28 +833,31 @@ public class HamsterBallController : MonoBehaviour
 
         SpendLoveForDash();
 
-        dashStartedInAir = !isGrounded && !hasRoadAttachmentThisFrame;
+        dashStartedInAir = !isGrounded && !hasGroundProbe;
 
-        Vector3 horizontal = GetHorizontalVelocity();
-        Vector3 dashDirection = horizontal.sqrMagnitude > 0.001f
-            ? horizontal.normalized
-            : GetForwardFromFacing();
+        Vector3 movePlaneNormal = GetMovePlaneNormal();
+        Vector3 planarVelocity = GetPlanarVelocity(movePlaneNormal);
 
-        float currentSpeedAlongDash = Vector3.Dot(horizontal, dashDirection);
+        Vector3 dashDirection = planarVelocity.sqrMagnitude > 0.001f
+            ? planarVelocity.normalized
+            : ProjectDirectionOnMovePlane(GetForwardFromFacing());
+
+        if (isGrounded || hasGroundProbe)
+            dashDirection = ProjectDirectionOnMovePlane(dashDirection);
+
+        float currentSpeedAlongDash = Vector3.Dot(planarVelocity, dashDirection);
         float targetSpeed = Mathf.Max(dashStartSpeed, currentSpeedAlongDash);
 
-        Vector3 newHorizontal = dashDirection * targetSpeed;
+        Vector3 newPlanarVelocity = dashDirection * targetSpeed;
+        Vector3 normalVelocity = Vector3.Project(rb.linearVelocity, movePlaneNormal);
 
         storedDashYVelocity = rb.linearVelocity.y;
         wasDashGravityFrozen = dashStartedInAir;
 
-        float yVelocity = dashStartedInAir ? 0f : rb.linearVelocity.y;
+        if (dashStartedInAir)
+            normalVelocity = Vector3.zero;
 
-        rb.linearVelocity = new Vector3(
-            newHorizontal.x,
-            yVelocity,
-            newHorizontal.z
-        );
+        rb.linearVelocity = newPlanarVelocity + normalVelocity;
 
         dashTimer = dashDuration;
         dashCooldownTimer = dashCooldown;
@@ -977,10 +1052,8 @@ public class HamsterBallController : MonoBehaviour
         }
 
         groundedTimer = 0f;
-        stickGraceTimer = 0f;
         jumpDetachTimer = 0f;
         isGrounded = false;
-        hasRoadAttachmentThisFrame = false;
 
         TriggerSharedSpeedCameraKick();
     }
@@ -1088,9 +1161,7 @@ public class HamsterBallController : MonoBehaviour
 
         lastGroundNormal = activeRailSample.up;
         groundedTimer = 0f;
-        stickGraceTimer = 0f;
         isGrounded = false;
-        hasRoadAttachmentThisFrame = false;
     }
 
     private void ForceRailEndSampleForward()
@@ -1456,9 +1527,7 @@ public class HamsterBallController : MonoBehaviour
         rb.angularVelocity = Vector3.zero;
 
         groundedTimer = 0f;
-        stickGraceTimer = 0f;
         isGrounded = false;
-        hasRoadAttachmentThisFrame = false;
 
         activeRailSpline = null;
         currentRailSpeed = 0f;
@@ -1652,9 +1721,7 @@ public class HamsterBallController : MonoBehaviour
 
         jumpDetachTimer = Mathf.Max(jumpDetachTimer, hitTarget.GetDetachFromGroundTime());
         groundedTimer = 0f;
-        stickGraceTimer = 0f;
         isGrounded = false;
-        hasRoadAttachmentThisFrame = false;
 
         chainRetargetLockoutTimer = chainRetargetLockoutDuration;
 
@@ -1940,114 +2007,7 @@ public class HamsterBallController : MonoBehaviour
 
         return sphereCol.radius * maxScale;
     }
-    private void RefreshRoadAttachment()
-    {
-        hasRoadAttachmentThisFrame = false;
-
-        if (!useRoadAttachment || roadSplineSampler == null)
-            return;
-
-        if (jumpDetachTimer > 0f || isChainDashing || isInChainHitStop || isRailGrinding)
-            return;
-
-        if (!roadSplineSampler.TryFindClosestRoadSample(
-                rb.position,
-                roadAttachmentSearchResolution,
-                out SplineSampler.ClosestRoadSample sample))
-        {
-            return;
-        }
-
-        float usableHalfWidth = Mathf.Max(0.05f, roadSplineSampler.Width - roadAttachmentWidthPadding);
-
-        Vector3 toPlayer = rb.position - sample.center;
-        float lateral = Vector3.Dot(toPlayer, sample.right);
-        float clampedLateral = Mathf.Clamp(lateral, -usableHalfWidth, usableHalfWidth);
-
-        Vector3 desiredRoadPoint =
-            sample.center +
-            sample.right * clampedLateral +
-            sample.up * roadAttachmentHoverOffset;
-
-        float distanceToDesired = Vector3.Distance(rb.position, desiredRoadPoint);
-        float awaySpeed = Vector3.Dot(rb.linearVelocity, sample.up);
-        float heightAboveRoad = Vector3.Dot(rb.position - desiredRoadPoint, sample.up);
-
-        if (distanceToDesired > roadAttachmentCatchDistance)
-            return;
-
-        if (heightAboveRoad > 0f && awaySpeed > roadAttachmentMaxCatchAwaySpeed)
-            return;
-
-        hasRoadAttachmentThisFrame = true;
-        roadAttachmentTargetPosition = desiredRoadPoint;
-        roadAttachmentUp = sample.up.normalized;
-        roadAttachmentForward = sample.forward.normalized;
-
-        lastGroundNormal = roadAttachmentUp;
-        groundedTimer = Mathf.Max(groundedTimer, groundedMemory);
-        stickGraceTimer = Mathf.Max(stickGraceTimer, groundStickGraceTime);
-        isGrounded = true;
-    }
-
-    private void ApplyRoadAttachment(float dt)
-    {
-        if (!hasRoadAttachmentThisFrame)
-            return;
-
-        Vector3 correction = Vector3.Project(roadAttachmentTargetPosition - rb.position, roadAttachmentUp);
-
-        float maxStep = roadAttachmentSnapSpeed * dt;
-        if (correction.magnitude > maxStep)
-            correction = correction.normalized * maxStep;
-
-        rb.MovePosition(rb.position + correction);
-
-        float awaySpeed = Vector3.Dot(rb.linearVelocity, roadAttachmentUp);
-        if (awaySpeed > 0f)
-            rb.linearVelocity -= roadAttachmentUp * awaySpeed;
-
-        float intoRoadSpeed = Vector3.Dot(rb.linearVelocity, -roadAttachmentUp);
-        if (intoRoadSpeed > roadAttachmentMaxIntoRoadSpeed)
-            rb.linearVelocity += roadAttachmentUp * (intoRoadSpeed - roadAttachmentMaxIntoRoadSpeed);
-
-        PreventBackwardsRoadTravel();
-    }
-
-    private void PreventBackwardsRoadTravel()
-    {
-        if (!hasRoadAttachmentThisFrame)
-            return;
-
-        Vector3 roadForward = roadAttachmentForward;
-        roadForward = Vector3.ProjectOnPlane(roadForward, roadAttachmentUp);
-
-        if (roadForward.sqrMagnitude < 0.0001f)
-            return;
-
-        roadForward.Normalize();
-
-        Vector3 velocity = rb.linearVelocity;
-        Vector3 verticalVelocity = Vector3.Project(velocity, roadAttachmentUp);
-        Vector3 planarVelocity = Vector3.ProjectOnPlane(velocity, roadAttachmentUp);
-
-        float planarSpeed = planarVelocity.magnitude;
-
-        if (planarSpeed < 0.1f)
-            planarSpeed = maxGroundSpeed * 0.5f;
-
-        float forwardDot = Vector3.Dot(planarVelocity.normalized, roadForward);
-
-        // If moving even slightly backwards, HARD SNAP velocity to the spline's correct direction.
-        if (forwardDot < 0f)
-        {
-            rb.linearVelocity = roadForward * planarSpeed + verticalVelocity;
-
-            facingYaw = Mathf.Atan2(roadForward.x, roadForward.z) * Mathf.Rad2Deg;
-            lastStableMoveDirection = roadForward;
-            smoothedVisualForward = roadForward;
-        }
-    }
+ 
 
     private void ApplyDrive(float dt)
     {
@@ -2087,8 +2047,10 @@ public class HamsterBallController : MonoBehaviour
         {
             if (lockSteeringDuringDash)
             {
-                desiredForward = GetHorizontalVelocity().sqrMagnitude > 0.001f
-                    ? GetHorizontalVelocity().normalized
+                Vector3 horizontalVelocity = GetHorizontalVelocity();
+
+                desiredForward = horizontalVelocity.sqrMagnitude > 0.001f
+                    ? horizontalVelocity.normalized
                     : GetForwardFromFacing();
             }
             else
@@ -2129,9 +2091,19 @@ public class HamsterBallController : MonoBehaviour
 
             if (currentSpeed > 0.001f && Mathf.Abs(steerInput) > 0.001f)
             {
-                float preservedSpeed = Mathf.Lerp(currentSpeed, Mathf.Max(currentSpeed, baseMaxSpeed), turnSpeedPreservation);
+                float preservedSpeed = Mathf.Lerp(
+                    currentSpeed,
+                    Mathf.Max(currentSpeed, baseMaxSpeed),
+                    turnSpeedPreservation
+                );
+
                 Vector3 redirected = desiredForward * preservedSpeed;
-                rb.linearVelocity = new Vector3(redirected.x, rb.linearVelocity.y, redirected.z);
+
+                rb.linearVelocity = new Vector3(
+                    redirected.x,
+                    rb.linearVelocity.y,
+                    redirected.z
+                );
             }
         }
 
@@ -2139,18 +2111,33 @@ public class HamsterBallController : MonoBehaviour
         float newSpeed = newHorizontal.magnitude;
         bool stillOverspeed = newSpeed > maxSpeed;
 
-        if (stillOverspeed)
+        if (stillOverspeed && newHorizontal.sqrMagnitude > 0.001f)
         {
             if (useSmoothOverSpeedDecay)
             {
-                float clampedSpeed = Mathf.MoveTowards(newSpeed, maxSpeed, overSpeedDeceleration * dt);
+                float clampedSpeed = Mathf.MoveTowards(
+                    newSpeed,
+                    maxSpeed,
+                    overSpeedDeceleration * dt
+                );
+
                 Vector3 adjusted = newHorizontal.normalized * clampedSpeed;
-                rb.linearVelocity = new Vector3(adjusted.x, rb.linearVelocity.y, adjusted.z);
+
+                rb.linearVelocity = new Vector3(
+                    adjusted.x,
+                    rb.linearVelocity.y,
+                    adjusted.z
+                );
             }
             else
             {
                 Vector3 clamped = newHorizontal.normalized * maxSpeed;
-                rb.linearVelocity = new Vector3(clamped.x, rb.linearVelocity.y, clamped.z);
+
+                rb.linearVelocity = new Vector3(
+                    clamped.x,
+                    rb.linearVelocity.y,
+                    clamped.z
+                );
             }
         }
     }
@@ -2161,42 +2148,34 @@ public class HamsterBallController : MonoBehaviour
             return;
 
         Vector3 horizontal = GetHorizontalVelocity();
+
         if (horizontal.sqrMagnitude < 0.0001f)
             return;
 
         Vector3 forward = GetForwardFromFacing();
+
         float forwardSpeed = Vector3.Dot(horizontal, forward);
 
         Vector3 forwardVelocity = forward * forwardSpeed;
         Vector3 lateralVelocity = horizontal - forwardVelocity;
 
         float grip = isGrounded ? groundLateralGrip : airLateralGrip;
-        Vector3 lateralReduction = Vector3.MoveTowards(lateralVelocity, Vector3.zero, grip * dt);
+
+        Vector3 lateralReduction = Vector3.MoveTowards(
+            lateralVelocity,
+            Vector3.zero,
+            grip * dt
+        );
 
         Vector3 correctedHorizontal = forwardVelocity + lateralReduction;
-        rb.linearVelocity = new Vector3(correctedHorizontal.x, rb.linearVelocity.y, correctedHorizontal.z);
+
+        rb.linearVelocity = new Vector3(
+            correctedHorizontal.x,
+            rb.linearVelocity.y,
+            correctedHorizontal.z
+        );
     }
 
-    private void ApplyGroundStick()
-    {
-        if (hasRoadAttachmentThisFrame)
-            return;
-
-        if (jumpDetachTimer > 0f || isInChainHitStop || isRailGrinding)
-            return;
-
-        bool shouldStick = isGrounded || stickGraceTimer > 0f;
-        if (!shouldStick)
-            return;
-
-        Vector3 groundUp = lastGroundNormal.normalized;
-
-        rb.AddForce(-groundUp * groundStickForce, ForceMode.Acceleration);
-
-        float awaySpeed = Vector3.Dot(rb.linearVelocity, groundUp);
-        if (awaySpeed > 0f && awaySpeed < maxStickAwaySpeed)
-            rb.linearVelocity -= groundUp * awaySpeed;
-    }
 
     private void ApplyJumpGravity()
     {
@@ -2207,6 +2186,10 @@ public class HamsterBallController : MonoBehaviour
             return;
 
         float gravityToApply = rb.linearVelocity.y > 0f ? RiseGravity : FallGravity;
+
+        // Keep normal world gravity for now.
+        // The jump itself launches away from road/player up;
+        // gravity brings the player back down in world space after that.
         rb.AddForce(Vector3.down * gravityToApply, ForceMode.Acceleration);
     }
 
@@ -2218,24 +2201,61 @@ public class HamsterBallController : MonoBehaviour
         if (!jumpPressed || !isGrounded || jumpTimer > 0f || isInChainHitStop)
             return;
 
-        Vector3 jumpDir = Vector3.Slerp(
-            Vector3.up,
-            lastGroundNormal.normalized,
-            jumpFromGroundNormalPercent
-        ).normalized;
+        Vector3 jumpDir = GetJumpAwayDirection();
+        heldAirborneVisualUp = jumpDir.normalized;
+        smoothedVisualUp = heldAirborneVisualUp;
 
-        float existingAlongJump = Vector3.Dot(rb.linearVelocity, jumpDir);
-        if (existingAlongJump < 0f)
-            rb.linearVelocity -= jumpDir * existingAlongJump;
+        // Preserve your current movement along the road plane.
+        Vector3 movePlaneNormal = GetMovePlaneNormal();
+        Vector3 planarVelocity = GetPlanarVelocity(movePlaneNormal);
 
-        rb.linearVelocity += jumpDir * JumpLaunchSpeed;
+        // Remove any existing velocity pushing against the jump direction.
+        Vector3 currentVelocity = rb.linearVelocity;
+        float existingJumpSpeed = Vector3.Dot(currentVelocity, jumpDir);
+
+        if (existingJumpSpeed < 0f)
+            currentVelocity -= jumpDir * existingJumpSpeed;
+
+        // Final jump velocity:
+        // - keep road-plane movement
+        // - add pure jump away from the road/player local up
+        rb.linearVelocity = planarVelocity + jumpDir * JumpLaunchSpeed;
+
+        // Nudge the body away from the surface immediately.
+        // This prevents the ground probe from seeing the same slope again on the next frame.
+        if (jumpSurfaceExitOffset > 0f)
+            rb.position += jumpDir * jumpSurfaceExitOffset;
 
         isGrounded = false;
         groundedTimer = 0f;
-        stickGraceTimer = 0f;
         jumpTimer = jumpCooldown;
         jumpDetachTimer = jumpDetachTime;
-        hasRoadAttachmentThisFrame = false;
+        groundSnapTimer = 0f;
+        hasGroundProbe = false;
+    }
+
+    private Vector3 GetJumpAwayDirection()
+    {
+        Vector3 jumpDir = Vector3.zero;
+
+        // Prefer the player's visible/local up if it is aligned to the slope.
+        // This makes jump feel like it comes from the player body, not from world space.
+        if (jumpUsesVisualLocalUp && visualRoot != null)
+            jumpDir = visualRoot.up;
+
+        // Fallback to the road/ground normal.
+        if (jumpDir.sqrMagnitude < 0.001f)
+            jumpDir = lastGroundNormal;
+
+        // Fallback to the smoothed probe normal.
+        if (jumpDir.sqrMagnitude < 0.001f)
+            jumpDir = smoothedGroundNormal;
+
+        // Absolute fallback.
+        if (jumpDir.sqrMagnitude < 0.001f)
+            jumpDir = Vector3.up;
+
+        return jumpDir.normalized;
     }
 
     private void UpdateVisuals()
@@ -2243,7 +2263,50 @@ public class HamsterBallController : MonoBehaviour
         if (visualRoot == null)
             return;
 
-        Vector3 visualUp = isRailGrinding ? activeRailSample.up.normalized : Vector3.up;
+        bool groundedForVisuals = isGrounded || hasGroundProbe;
+
+        Vector3 targetVisualUp;
+
+        if (isRailGrinding)
+        {
+            targetVisualUp = activeRailSample.up.normalized;
+        }
+        else if (groundedForVisuals)
+        {
+            targetVisualUp = lastGroundNormal.sqrMagnitude > 0.001f
+                ? lastGroundNormal.normalized
+                : Vector3.up;
+
+            heldAirborneVisualUp = targetVisualUp;
+        }
+        else
+        {
+            targetVisualUp = holdJumpVisualAngleUntilGrounded
+                ? heldAirborneVisualUp
+                : Vector3.up;
+        }
+
+        if (targetVisualUp.sqrMagnitude < 0.001f)
+            targetVisualUp = Vector3.up;
+
+        targetVisualUp.Normalize();
+
+        if (groundedForVisuals || isRailGrinding)
+        {
+            smoothedVisualUp = Vector3.Slerp(
+                smoothedVisualUp,
+                targetVisualUp,
+                Mathf.Clamp01(groundedVisualUpSmooth * Time.deltaTime)
+            ).normalized;
+        }
+        else
+        {
+            // Airborne: hold the exact angle from takeoff. No snap-back.
+            smoothedVisualUp = targetVisualUp;
+        }
+
+        Vector3 visualUp = smoothedVisualUp;
+
         visualRoot.position = transform.position + visualUp * rideHeight;
         Vector3 horizontalVelocity = GetHorizontalVelocity();
         float horizontalSpeed = horizontalVelocity.magnitude;
@@ -2271,9 +2334,15 @@ public class HamsterBallController : MonoBehaviour
             targetForward = lastStableMoveDirection;
         }
 
-        targetForward.y = 0f;
+        targetForward = Vector3.ProjectOnPlane(targetForward, visualUp);
+
         if (targetForward.sqrMagnitude < 0.001f)
-            targetForward = GetForwardFromFacing();
+        {
+            targetForward = Vector3.ProjectOnPlane(GetForwardFromFacing(), visualUp);
+        }
+
+        if (targetForward.sqrMagnitude < 0.001f)
+            targetForward = Vector3.forward;
 
         targetForward.Normalize();
 
@@ -2300,43 +2369,15 @@ public class HamsterBallController : MonoBehaviour
         }
         else
         {
-            facingRotation = Quaternion.LookRotation(smoothedVisualForward, Vector3.up);
+            facingRotation = Quaternion.LookRotation(smoothedVisualForward, visualUp);
         }
 
         Quaternion leanRotation = Quaternion.AngleAxis(leanAmount, Vector3.forward);
         visualRoot.rotation = facingRotation * leanRotation;
     }
 
-    private void OnCollisionEnter(Collision collision)
-    {
-        EvaluateCollision(collision);
-    }
-
-    private void OnCollisionStay(Collision collision)
-    {
-        EvaluateCollision(collision);
-    }
-
-    private void EvaluateCollision(Collision collision)
-    {
-        if (isRailGrinding)
-            return;
-
-        for (int i = 0; i < collision.contactCount; i++)
-        {
-            Vector3 normal = collision.GetContact(i).normal;
-            float angle = Vector3.Angle(normal, Vector3.up);
-
-            if (angle <= maxGroundAngle)
-            {
-                lastGroundNormal = normal.normalized;
-                groundedTimer = groundedMemory;
-                stickGraceTimer = groundStickGraceTime;
-                isGrounded = true;
-                return;
-            }
-        }
-    }
+    
+   
 
     private void TriggerSharedSpeedCameraKick()
     {
@@ -2363,6 +2404,38 @@ public class HamsterBallController : MonoBehaviour
         Vector3 v = rb.linearVelocity;
         v.y = 0f;
         return v;
+    }
+
+    private Vector3 GetMovePlaneNormal()
+    {
+        if (isGrounded || hasGroundProbe)
+        {
+            Vector3 n = lastGroundNormal;
+
+            if (n.sqrMagnitude > 0.001f)
+                return n.normalized;
+        }
+
+        return Vector3.up;
+    }
+
+    private Vector3 GetPlanarVelocity(Vector3 planeNormal)
+    {
+        return Vector3.ProjectOnPlane(rb.linearVelocity, planeNormal);
+    }
+
+    private Vector3 ProjectDirectionOnMovePlane(Vector3 direction)
+    {
+        Vector3 planeNormal = GetMovePlaneNormal();
+        Vector3 projected = Vector3.ProjectOnPlane(direction, planeNormal);
+
+        if (projected.sqrMagnitude < 0.001f)
+            projected = Vector3.ProjectOnPlane(GetForwardFromFacing(), planeNormal);
+
+        if (projected.sqrMagnitude < 0.001f)
+            projected = GetForwardFromFacing();
+
+        return projected.normalized;
     }
 
     public Vector3 GetGroundNormal()
@@ -2608,5 +2681,134 @@ public class HamsterBallController : MonoBehaviour
             out bestRail,
             out bestSample
         );
+    }
+
+    private void ProbeGround(float dt)
+    {
+        hasGroundProbe = false;
+
+        if (jumpDetachTimer > 0f || isChainDashing || isInChainHitStop || isRailGrinding)
+        {
+            hasGroundProbe = false;
+            isGrounded = false;
+            groundedTimer = 0f;
+            return;
+        }
+
+        float speed = rb.linearVelocity.magnitude;
+        float extraDistance = Mathf.Min(
+            groundProbeMaxExtraDistance,
+            speed * groundProbeSpeedDistanceMultiplier
+        );
+
+        Vector3 origin = rb.position + Vector3.up * groundProbeStartOffset;
+        Vector3 castDirection = Vector3.down;
+        float castDistance = groundProbeStartOffset + groundProbeDistance + extraDistance;
+
+        bool foundHit = false;
+        RaycastHit bestHit = default;
+
+        if (groundProbeRadius > 0.001f)
+        {
+            foundHit = Physics.SphereCast(
+                origin,
+                groundProbeRadius,
+                castDirection,
+                out bestHit,
+                castDistance,
+                groundProbeLayers,
+                QueryTriggerInteraction.Ignore
+            );
+        }
+
+        if (!foundHit)
+        {
+            foundHit = Physics.Raycast(
+                origin,
+                castDirection,
+                out bestHit,
+                castDistance,
+                groundProbeLayers,
+                QueryTriggerInteraction.Ignore
+            );
+        }
+
+        if (!foundHit)
+        {
+            isGrounded = groundedTimer > 0f;
+            return;
+        }
+
+        float angle = Vector3.Angle(bestHit.normal, Vector3.up);
+        if (angle > maxGroundAngle)
+        {
+            isGrounded = groundedTimer > 0f;
+            return;
+        }
+
+        Vector3 hitNormal = bestHit.normal.normalized;
+
+        // Important: if we are moving away from the ground, do not let
+        // the anti-tunnel system reattach us and cancel jumps.
+        float speedAwayFromGround = Vector3.Dot(rb.linearVelocity, hitNormal);
+        if (speedAwayFromGround > 0.5f && groundedTimer <= 0f)
+        {
+            isGrounded = false;
+            return;
+        }
+
+        hasGroundProbe = true;
+        probedGroundPoint = bestHit.point;
+        probedGroundNormal = hitNormal;
+        groundProbeDistanceThisFrame = bestHit.distance;
+
+        smoothedGroundNormal = Vector3.Slerp(
+            smoothedGroundNormal,
+            probedGroundNormal,
+            Mathf.Clamp01(groundNormalSmoothSpeed * dt)
+        ).normalized;
+
+        lastGroundNormal = smoothedGroundNormal;
+        groundedTimer = groundedMemory;
+        groundSnapTimer = groundSnapMemory;
+        isGrounded = true;
+    }
+
+    private void ResolveGroundedMovement(float dt)
+    {
+        if (!hasGroundProbe || !isGrounded)
+            return;
+
+        Vector3 groundUp = smoothedGroundNormal.normalized;
+
+        float playerRadius = GetScaledPlayerRadius();
+
+        Vector3 desiredCenter =
+            probedGroundPoint +
+            groundUp * (playerRadius + groundSkin + groundImpactSkin);
+
+        Vector3 toDesired = desiredCenter - rb.position;
+
+        Vector3 normalCorrection = Vector3.Project(toDesired, groundUp);
+
+        float maxCorrection = Mathf.Min(
+            maxGroundCorrectionPerStep,
+            groundHeightCorrectionSpeed * dt
+        );
+
+        if (normalCorrection.magnitude > maxCorrection)
+            normalCorrection = normalCorrection.normalized * maxCorrection;
+
+        rb.MovePosition(rb.position + normalCorrection);
+
+        Vector3 velocity = rb.linearVelocity;
+
+        float intoGroundSpeed = Vector3.Dot(velocity, -groundUp);
+        if (intoGroundSpeed > 0f)
+            velocity += groundUp * intoGroundSpeed;
+
+        velocity = Vector3.ProjectOnPlane(velocity, groundUp);
+
+        rb.linearVelocity = velocity;
     }
 }
