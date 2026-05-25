@@ -98,8 +98,9 @@ public class HamsterBallController : MonoBehaviour
     [Tooltip("Small extra position push away from the road normal when jumping. Helps prevent instant re-grounding on slopes.")]
     public float jumpSurfaceExitOffset = 0.08f;
 
-    [Tooltip("If true, jump uses the current visual/player local up when available. If false, it uses the last road normal.")]
-    public bool jumpUsesVisualLocalUp = true;
+
+
+ 
 
     [Header("Free Dash")]
     [Tooltip("If true, the love meter must be full to dash.")]
@@ -353,7 +354,7 @@ public class HamsterBallController : MonoBehaviour
     [Tooltip("Extra upward safety offset when resolving ground after fast impacts.")]
     public float groundImpactSkin = 0.10f;
 
- 
+
 
     [Header("Visuals")]
     [Tooltip("Vertical offset for the visual model.")]
@@ -435,6 +436,7 @@ public class HamsterBallController : MonoBehaviour
     private Vector3 smoothedGroundNormal = Vector3.up;
     private float groundProbeDistanceThisFrame;
     private float groundSnapTimer;
+    
 
     private Vector3 railSwitchHopStartPos;
     private Vector3 railSwitchHopMidPos;
@@ -490,7 +492,10 @@ public class HamsterBallController : MonoBehaviour
         lastStableMoveDirection = startForward;
         smoothedVisualUp = Vector3.up;
         heldAirborneVisualUp = Vector3.up;
+        
     }
+
+  
 
     private void Update()
     {
@@ -578,10 +583,7 @@ public class HamsterBallController : MonoBehaviour
         ApplyMagneticBarrierVelocityResponse(dt);
         UpdateFacingFromMovement();
 
-        // Do NOT call old ApplyRoadAttachment or ApplyGroundStick here.
-        // The ground probe is now the ground authority.
-
-        ApplyJumpGravity();
+        ApplyJumpGravity(dt);
         HandleJump();
 
         jumpPressed = false;
@@ -685,7 +687,9 @@ public class HamsterBallController : MonoBehaviour
         isChainDashing = false;
         isInChainHitStop = false;
         chainRetargetLockoutTimer = 0f;
-         
+
+       
+
 
         isRailGrinding = false;
         activeRailSpline = null;
@@ -1470,6 +1474,8 @@ public class HamsterBallController : MonoBehaviour
 
     private void ExitRailGrind(bool jumpedOff)
     {
+
+      
         if (!isRailGrinding)
             return;
 
@@ -1652,6 +1658,7 @@ public class HamsterBallController : MonoBehaviour
         isInChainHitStop = true;
         isChainDashing = false;
 
+
         hitTarget.NotifyHit();
 
         Vector3 aimPos = hitTarget.GetAimPosition();
@@ -1680,6 +1687,8 @@ public class HamsterBallController : MonoBehaviour
 
         // Launch debris / impact objects at the same moment the player launches away.
         hitTarget.TriggerZoneImpact();
+
+
 
         Vector3 launchDir = hitTarget.GetLaunchDirection();
         if (launchDir.sqrMagnitude < 0.001f)
@@ -1722,6 +1731,8 @@ public class HamsterBallController : MonoBehaviour
         jumpDetachTimer = Mathf.Max(jumpDetachTimer, hitTarget.GetDetachFromGroundTime());
         groundedTimer = 0f;
         isGrounded = false;
+
+    
 
         chainRetargetLockoutTimer = chainRetargetLockoutDuration;
 
@@ -2201,28 +2212,28 @@ public class HamsterBallController : MonoBehaviour
         if (!jumpPressed || !isGrounded || jumpTimer > 0f || isInChainHitStop)
             return;
 
-        Vector3 jumpDir = GetJumpAwayDirection();
-        heldAirborneVisualUp = jumpDir.normalized;
-        smoothedVisualUp = heldAirborneVisualUp;
+        Vector3 jumpDir = Vector3.up;
 
-        // Preserve your current movement along the road plane.
-        Vector3 movePlaneNormal = GetMovePlaneNormal();
-        Vector3 planarVelocity = GetPlanarVelocity(movePlaneNormal);
+        // Visuals can keep the current slope angle briefly, but jump physics is world-up.
+        heldAirborneVisualUp = smoothedVisualUp.sqrMagnitude > 0.001f
+            ? smoothedVisualUp.normalized
+            : Vector3.up;
 
-        // Remove any existing velocity pushing against the jump direction.
+        // Preserve current horizontal movement only.
+        Vector3 horizontalVelocity = GetHorizontalVelocity();
+
+        // Remove downward velocity before jumping.
         Vector3 currentVelocity = rb.linearVelocity;
-        float existingJumpSpeed = Vector3.Dot(currentVelocity, jumpDir);
+        if (currentVelocity.y < 0f)
+            currentVelocity.y = 0f;
 
-        if (existingJumpSpeed < 0f)
-            currentVelocity -= jumpDir * existingJumpSpeed;
+        rb.linearVelocity = new Vector3(
+            horizontalVelocity.x,
+            JumpLaunchSpeed,
+            horizontalVelocity.z
+        );
 
-        // Final jump velocity:
-        // - keep road-plane movement
-        // - add pure jump away from the road/player local up
-        rb.linearVelocity = planarVelocity + jumpDir * JumpLaunchSpeed;
-
-        // Nudge the body away from the surface immediately.
-        // This prevents the ground probe from seeing the same slope again on the next frame.
+        // Tiny world-up nudge so the ground probe does not instantly re-catch us.
         if (jumpSurfaceExitOffset > 0f)
             rb.position += jumpDir * jumpSurfaceExitOffset;
 
@@ -2234,29 +2245,7 @@ public class HamsterBallController : MonoBehaviour
         hasGroundProbe = false;
     }
 
-    private Vector3 GetJumpAwayDirection()
-    {
-        Vector3 jumpDir = Vector3.zero;
-
-        // Prefer the player's visible/local up if it is aligned to the slope.
-        // This makes jump feel like it comes from the player body, not from world space.
-        if (jumpUsesVisualLocalUp && visualRoot != null)
-            jumpDir = visualRoot.up;
-
-        // Fallback to the road/ground normal.
-        if (jumpDir.sqrMagnitude < 0.001f)
-            jumpDir = lastGroundNormal;
-
-        // Fallback to the smoothed probe normal.
-        if (jumpDir.sqrMagnitude < 0.001f)
-            jumpDir = smoothedGroundNormal;
-
-        // Absolute fallback.
-        if (jumpDir.sqrMagnitude < 0.001f)
-            jumpDir = Vector3.up;
-
-        return jumpDir.normalized;
-    }
+  
 
     private void UpdateVisuals()
     {
@@ -2811,4 +2800,21 @@ public class HamsterBallController : MonoBehaviour
 
         rb.linearVelocity = velocity;
     }
+
+    private void ApplyJumpGravity(float dt)
+    {
+        if (isGrounded || isInChainHitStop || isRailGrinding)
+            return;
+
+        if (dashStartedInAir && dashTimer > 0f)
+            return;
+
+        float gravityToApply = rb.linearVelocity.y > 0f ? RiseGravity : FallGravity;
+
+        rb.AddForce(Vector3.down * gravityToApply, ForceMode.Acceleration);
+    }
+
+
+
+ 
 }

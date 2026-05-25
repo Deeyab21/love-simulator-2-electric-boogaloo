@@ -18,23 +18,43 @@ public class RunnerFollowCamera : MonoBehaviour
     public float positionSmoothTime = 0.12f;
 
     [Header("Heading")]
+    [Tooltip("How quickly the camera heading follows the runner's forward direction.")]
     public float yawSmoothSpeed = 6f;
+
+    [Tooltip("Minimum heading strength before the camera keeps its previous heading.")]
     public float minHeadingMagnitude = 0.1f;
 
     [Header("Look Ahead")]
     public float lookAheadDistance = 2.0f;
     public float lookAheadSmoothSpeed = 5f;
 
-    [Header("Pitch")]
-    public float fixedPitch = 18f;
+    [Header("Banked Camera Frame")]
+    [Tooltip("If true, the camera follow frame uses the runner/ground up direction instead of world up.")]
+    public bool useRoadBankFollow = true;
 
-    [Header("Slope Pitch")]
-    public bool useSlopePitch = true;
-    public float maxSlopePitchOffset = 12f;
-    public float slopePitchSmoothSpeed = 5f;
+    [Tooltip("When grounded, use the ground normal from the runner. This is best for banking with the road.")]
+    public bool useGroundNormalWhenGrounded = true;
+
+    [Tooltip("When not grounded / off the road, smoothly return the camera to normal world up.")]
+    public bool returnToWorldUpWhenAirborne = true;
+
+    [Header("Banked Camera Smoothing")]
+    [Tooltip("How quickly the camera up direction follows the runner/ground up.")]
+    public float cameraUpSmoothSpeed = 8f;
+
+    [Tooltip("How quickly the camera returns to world up / target up when leaving ground.")]
+    public float cameraUpReturnSpeed = 5f;
+
+    [Tooltip("Tiny up-direction changes below this angle are ignored to prevent micro-jitter.")]
+    public float cameraUpDeadZoneDegrees = 0.1f;
+
+    [Tooltip("How quickly the banked camera forward direction stabilizes.")]
+    public float cameraForwardSmoothSpeed = 10f;
 
     [Header("Turning Juice - Camera Bank")]
+    [Tooltip("Optional extra camera roll from steering. Turn this off while testing the pure banked camera.")]
     public bool useTurnBank = true;
+
     public float maxBankAngle = 10f;
     public float bankSmoothSpeed = 8f;
     public float bankReturnSpeed = 6f;
@@ -126,8 +146,10 @@ public class RunnerFollowCamera : MonoBehaviour
     private Vector3 positionVelocity;
     private Vector3 smoothedHeading = Vector3.forward;
     private Vector3 smoothedLookAhead = Vector3.zero;
-    private float currentYaw;
-    private float currentSlopePitchOffset;
+
+    private Vector3 smoothedCameraUp = Vector3.up;
+    private Vector3 smoothedCameraForward = Vector3.forward;
+    private Vector3 currentFrameCameraUp = Vector3.up;
 
     private float currentKickAmount;
     private float targetKickAmount;
@@ -144,7 +166,7 @@ public class RunnerFollowCamera : MonoBehaviour
     private float shakeIntensity;
 
     private float attackStopTimer;
-    private float lockedAttackYaw;
+    private Vector3 lockedAttackHeading = Vector3.forward;
 
     private float landingBounceOffset;
     private float landingBounceTarget;
@@ -170,14 +192,32 @@ public class RunnerFollowCamera : MonoBehaviour
                 targetCamera = GetComponentInChildren<Camera>();
         }
 
-        Vector3 initialForward = target.forward;
-        initialForward.y = 0f;
+        Vector3 cameraUp = GetCameraUpRaw();
+
+        Vector3 initialSourceForward = target.forward;
+
+        if (runner != null)
+        {
+            Vector3 runnerVelocity = runner.GetHorizontalVelocity();
+
+            if (runnerVelocity.sqrMagnitude > 0.001f)
+                initialSourceForward = runnerVelocity.normalized;
+            else
+                initialSourceForward = runner.transform.forward;
+        }
+
+        Vector3 initialForward = Vector3.ProjectOnPlane(initialSourceForward, cameraUp);
+
+        if (initialForward.sqrMagnitude < 0.0001f)
+            initialForward = Vector3.ProjectOnPlane(Vector3.forward, cameraUp);
 
         if (initialForward.sqrMagnitude < 0.0001f)
             initialForward = Vector3.forward;
 
         smoothedHeading = initialForward.normalized;
-        currentYaw = Mathf.Atan2(smoothedHeading.x, smoothedHeading.z) * Mathf.Rad2Deg;
+        smoothedCameraForward = smoothedHeading;
+        smoothedCameraUp = cameraUp.sqrMagnitude > 0.0001f ? cameraUp.normalized : Vector3.up;
+        lockedAttackHeading = smoothedHeading;
 
         if (targetCamera != null)
             targetCamera.fieldOfView = baseFov;
@@ -190,61 +230,82 @@ public class RunnerFollowCamera : MonoBehaviour
         if (target == null)
             return;
 
+        // IMPORTANT:
+        // Calculate the banked/world up ONCE per camera frame.
+        // Before this, UpdateHeading() and UpdateCameraPositionAndRotation()
+        // both updated smoothedCameraUp separately, which could create micro jitter.
+        currentFrameCameraUp = GetSmoothedCameraUp();
+
         if (attackStopTimer > 0f)
         {
             attackStopTimer -= Time.deltaTime;
 
-            if (!lockHeadingDuringAttackStop)
-                UpdateHeading();
+            if (lockHeadingDuringAttackStop)
+                smoothedHeading = lockedAttackHeading;
             else
-                currentYaw = lockedAttackYaw;
+                UpdateHeading(currentFrameCameraUp);
         }
         else
         {
-            UpdateHeading();
+            UpdateHeading(currentFrameCameraUp);
         }
 
-        UpdateCameraPositionAndRotation();
+        UpdateCameraPositionAndRotation(currentFrameCameraUp);
         UpdateFov();
     }
 
-    private void UpdateHeading()
+    private float ExpLerp(float speed)
     {
-        Vector3 desiredHeading;
+        return 1f - Mathf.Exp(-Mathf.Max(0.001f, speed) * Time.deltaTime);
+    }
 
+    private void UpdateHeading(Vector3 cameraUp)
+    {
+        Vector3 desiredHeading = Vector3.zero;
+
+        // IMPORTANT:
+        // Do NOT use target.forward as the main camera heading.
+        // Your target is now on the visual/model, which can lean/rotate during banked turns.
+        // That makes the camera slide into an over-the-shoulder angle.
+        //
+        // Instead, use the runner's actual movement direction first.
         if (runner != null)
         {
-            desiredHeading = runner.GetHorizontalVelocity();
-
-            if (desiredHeading.sqrMagnitude < (minHeadingMagnitude * minHeadingMagnitude))
-                desiredHeading = target.forward;
-        }
-        else
-        {
-            desiredHeading = target.forward;
+            Vector3 velocity = runner.GetHorizontalVelocity();
+            desiredHeading = Vector3.ProjectOnPlane(velocity, cameraUp);
         }
 
-        desiredHeading.y = 0f;
+        // If velocity is too small, use the player/root forward as a fallback.
+        // This is more stable than the visual target's forward.
+        if (desiredHeading.sqrMagnitude < (minHeadingMagnitude * minHeadingMagnitude) && runner != null)
+            desiredHeading = Vector3.ProjectOnPlane(runner.transform.forward, cameraUp);
+
+        // Only use target.forward as a last resort.
+        if (desiredHeading.sqrMagnitude < (minHeadingMagnitude * minHeadingMagnitude) && target != null)
+            desiredHeading = Vector3.ProjectOnPlane(target.forward, cameraUp);
 
         if (desiredHeading.sqrMagnitude < (minHeadingMagnitude * minHeadingMagnitude))
-        {
-            desiredHeading = smoothedHeading;
-        }
-        else
-        {
-            desiredHeading.Normalize();
-        }
+            desiredHeading = Vector3.ProjectOnPlane(smoothedHeading, cameraUp);
+
+        if (desiredHeading.sqrMagnitude < (minHeadingMagnitude * minHeadingMagnitude))
+            desiredHeading = Vector3.ProjectOnPlane(Vector3.forward, cameraUp);
+
+        if (desiredHeading.sqrMagnitude < 0.0001f)
+            desiredHeading = Vector3.Cross(cameraUp, Vector3.right);
+
+        if (desiredHeading.sqrMagnitude < 0.0001f)
+            desiredHeading = Vector3.forward;
+
+        desiredHeading.Normalize();
 
         smoothedHeading = Vector3.Slerp(
             smoothedHeading,
             desiredHeading,
-            yawSmoothSpeed * Time.deltaTime
+            ExpLerp(yawSmoothSpeed)
         ).normalized;
-
-        currentYaw = Mathf.Atan2(smoothedHeading.x, smoothedHeading.z) * Mathf.Rad2Deg;
     }
 
-    private void UpdateCameraPositionAndRotation()
+    private void UpdateCameraPositionAndRotation(Vector3 cameraUp)
     {
         float speed01 = GetSpeedPercent();
 
@@ -270,24 +331,24 @@ public class RunnerFollowCamera : MonoBehaviour
 
         UpdateJumpJuice(ref currentFollowHeight, ref currentLookAheadDistance);
         UpdateLandingBounce(ref currentFollowHeight);
-        UpdateBanking();
+        UpdateTurnBanking();
 
-        Quaternion yawRotation = Quaternion.Euler(0f, currentYaw, 0f);
+        Vector3 cameraForward = GetCameraForwardOnBankedPlane(cameraUp);
+        smoothedCameraForward = cameraForward;
 
-        Vector3 lookAhead = smoothedHeading * currentLookAheadDistance;
-        smoothedLookAhead = Vector3.Lerp(
-            smoothedLookAhead,
-            lookAhead,
-            lookAheadSmoothSpeed * Time.deltaTime
-        );
+        Vector3 rawLookAhead = cameraForward * currentLookAheadDistance;
 
-        Vector3 targetLookPoint = target.position + Vector3.up * lookHeightOffset + smoothedLookAhead;
+        smoothedLookAhead = rawLookAhead;
 
-        Vector3 desiredOffset =
-            (yawRotation * Vector3.back * currentFollowDistance) +
-            (Vector3.up * currentFollowHeight);
+        Vector3 targetLookPoint =
+            target.position +
+            cameraUp * lookHeightOffset +
+            smoothedLookAhead;
 
-        Vector3 desiredPosition = target.position + desiredOffset;
+        Vector3 desiredPosition =
+            target.position -
+            cameraForward * currentFollowDistance +
+            cameraUp * currentFollowHeight;
 
         transform.position = Vector3.SmoothDamp(
             transform.position,
@@ -296,24 +357,120 @@ public class RunnerFollowCamera : MonoBehaviour
             currentSmoothTime
         );
 
-        ApplyCameraShake();
+        ApplyCameraShake(cameraUp);
 
-        Quaternion lookRotation = Quaternion.LookRotation(targetLookPoint - transform.position, Vector3.up);
-        Vector3 euler = lookRotation.eulerAngles;
+        Vector3 lookDirection = targetLookPoint - transform.position;
 
-        float targetSlopePitch = GetSlopePitchOffset();
+        if (lookDirection.sqrMagnitude < 0.0001f)
+            lookDirection = cameraForward;
 
-        currentSlopePitchOffset = Mathf.Lerp(
-            currentSlopePitchOffset,
-            targetSlopePitch,
-            slopePitchSmoothSpeed * Time.deltaTime
+        Quaternion baseRotation = Quaternion.LookRotation(
+            lookDirection.normalized,
+            cameraUp
         );
 
-        transform.rotation = Quaternion.Euler(
-            fixedPitch + currentSlopePitchOffset,
-            euler.y,
-            currentBank
+        Quaternion turnBankRotation = Quaternion.AngleAxis(
+            currentBank,
+            Vector3.forward
         );
+
+        transform.rotation = baseRotation * turnBankRotation;
+    }
+
+    private Vector3 GetCameraUpRaw()
+    {
+        if (!useRoadBankFollow)
+            return Vector3.up;
+
+        bool groundedOnRoad = runner != null && runner.IsGrounded();
+
+        if (groundedOnRoad && useGroundNormalWhenGrounded)
+        {
+            Vector3 groundUp = runner.GetGroundNormal();
+
+            if (groundUp.sqrMagnitude > 0.0001f)
+                return groundUp.normalized;
+        }
+
+        // When airborne or no longer grounded on the spline/road,
+        // return to clean world up instead of inheriting the player's banked up.
+        if (returnToWorldUpWhenAirborne)
+            return Vector3.up;
+
+        // Optional fallback if you ever want the old behavior back.
+        if (target != null)
+        {
+            Vector3 targetUp = target.up;
+
+            if (targetUp.sqrMagnitude > 0.0001f)
+                return targetUp.normalized;
+        }
+
+        return Vector3.up;
+    }
+
+    private Vector3 GetSmoothedCameraUp()
+    {
+        Vector3 targetUp = GetCameraUpRaw();
+
+        if (targetUp.sqrMagnitude < 0.0001f)
+            targetUp = Vector3.up;
+
+        targetUp.Normalize();
+
+        if (smoothedCameraUp.sqrMagnitude < 0.0001f)
+            smoothedCameraUp = targetUp;
+
+        bool groundedOnRoad = runner != null && runner.IsGrounded();
+
+        float angle = Vector3.Angle(smoothedCameraUp, targetUp);
+
+        // Dead zone prevents tiny ground-normal changes from constantly rolling the camera.
+        if (angle <= cameraUpDeadZoneDegrees)
+            return smoothedCameraUp.normalized;
+
+        float smoothSpeed = groundedOnRoad ? cameraUpSmoothSpeed : cameraUpReturnSpeed;
+
+        smoothedCameraUp = Vector3.Slerp(
+            smoothedCameraUp,
+            targetUp,
+            ExpLerp(smoothSpeed)
+        ).normalized;
+
+        return smoothedCameraUp;
+    }
+
+    private Vector3 GetCameraForwardOnBankedPlane(Vector3 cameraUp)
+    {
+        Vector3 desiredHeading = Vector3.ProjectOnPlane(smoothedHeading, cameraUp);
+
+        if (desiredHeading.sqrMagnitude < 0.0001f && target != null)
+            desiredHeading = Vector3.ProjectOnPlane(target.forward, cameraUp);
+
+        if (desiredHeading.sqrMagnitude < 0.0001f)
+            desiredHeading = Vector3.ProjectOnPlane(Vector3.forward, cameraUp);
+
+        if (desiredHeading.sqrMagnitude < 0.0001f)
+            desiredHeading = Vector3.Cross(cameraUp, Vector3.right);
+
+        if (desiredHeading.sqrMagnitude < 0.0001f)
+            desiredHeading = Vector3.forward;
+
+        desiredHeading.Normalize();
+
+        Vector3 cameraRight = Vector3.Cross(cameraUp, desiredHeading);
+
+        if (cameraRight.sqrMagnitude < 0.0001f)
+            cameraRight = Vector3.right;
+
+        cameraRight.Normalize();
+
+        Vector3 cleanForward = Vector3.Cross(cameraRight, cameraUp);
+
+        if (cleanForward.sqrMagnitude < 0.0001f)
+            cleanForward = desiredHeading;
+
+        return cleanForward.normalized;
     }
 
     public void PlayLandingBounce(float downwardSpeed)
@@ -353,7 +510,7 @@ public class RunnerFollowCamera : MonoBehaviour
             landingBounceOffset = Mathf.Lerp(
                 landingBounceOffset,
                 landingBounceTarget,
-                landingDipInSpeed * Time.deltaTime
+                ExpLerp(landingDipInSpeed)
             );
         }
         else
@@ -363,7 +520,7 @@ public class RunnerFollowCamera : MonoBehaviour
             landingBounceOffset = Mathf.Lerp(
                 landingBounceOffset,
                 0f,
-                landingRecoverSpeed * Time.deltaTime
+                ExpLerp(landingRecoverSpeed)
             );
         }
 
@@ -374,7 +531,7 @@ public class RunnerFollowCamera : MonoBehaviour
     {
         attackStopTimer = Mathf.Max(attackStopTimer, duration);
 
-        lockedAttackYaw = currentYaw;
+        lockedAttackHeading = smoothedHeading;
         positionVelocity = Vector3.zero;
     }
 
@@ -391,40 +548,47 @@ public class RunnerFollowCamera : MonoBehaviour
         currentJumpOffset = Mathf.Lerp(
             currentJumpOffset,
             targetHeightOffset,
-            jumpSmoothSpeed * Time.deltaTime
+            ExpLerp(jumpSmoothSpeed)
         );
 
         currentJumpLookAheadOffset = Mathf.Lerp(
             currentJumpLookAheadOffset,
             targetLookAheadOffset,
-            jumpSmoothSpeed * Time.deltaTime
+            ExpLerp(jumpSmoothSpeed)
         );
 
         height += currentJumpOffset;
         lookAhead += currentJumpLookAheadOffset;
     }
 
-    private void UpdateBanking()
+    private void UpdateTurnBanking()
     {
         if (!useTurnBank || runner == null)
         {
-            currentBank = Mathf.Lerp(currentBank, 0f, bankReturnSpeed * Time.deltaTime);
+            currentBank = Mathf.Lerp(
+                currentBank,
+                0f,
+                ExpLerp(bankReturnSpeed)
+            );
+
             return;
         }
 
         float steer = runner.GetSteerInput();
         float targetBank = -steer * maxBankAngle;
 
-        float smooth = Mathf.Abs(steer) > 0.01f ? bankSmoothSpeed : bankReturnSpeed;
+        float smooth = Mathf.Abs(steer) > 0.01f
+            ? bankSmoothSpeed
+            : bankReturnSpeed;
 
         currentBank = Mathf.Lerp(
             currentBank,
             targetBank,
-            smooth * Time.deltaTime
+            ExpLerp(smooth)
         );
     }
 
-    private void ApplyCameraShake()
+    private void ApplyCameraShake(Vector3 cameraUp)
     {
         if (!useCameraShake || shakeTimer <= 0f)
             return;
@@ -438,9 +602,12 @@ public class RunnerFollowCamera : MonoBehaviour
         float currentIntensity = shakeIntensity * life01;
 
         Vector3 shakeOffset = Random.insideUnitSphere * currentIntensity;
-        shakeOffset.y *= 0.5f;
 
-        transform.position += shakeOffset;
+        // Keep shake relative to the banked camera frame instead of world Y.
+        Vector3 verticalShake = Vector3.Project(shakeOffset, cameraUp) * 0.5f;
+        Vector3 sideShake = Vector3.ProjectOnPlane(shakeOffset, cameraUp);
+
+        transform.position += sideShake + verticalShake;
 
         if (shakeTimer <= 0f)
         {
@@ -465,12 +632,14 @@ public class RunnerFollowCamera : MonoBehaviour
             targetKickAmount = 0f;
         }
 
-        float lerpSpeed = currentKickAmount < targetKickAmount ? kickInSpeed : kickOutSpeed;
+        float lerpSpeed = currentKickAmount < targetKickAmount
+            ? kickInSpeed
+            : kickOutSpeed;
 
         currentKickAmount = Mathf.Lerp(
             currentKickAmount,
             targetKickAmount,
-            lerpSpeed * Time.deltaTime
+            ExpLerp(lerpSpeed)
         );
 
         targetCamera.fieldOfView = baseFov + currentKickAmount;
@@ -551,6 +720,24 @@ public class RunnerFollowCamera : MonoBehaviour
 
     private void SnapImmediately()
     {
+        Vector3 cameraUp = GetCameraUpRaw();
+
+        if (cameraUp.sqrMagnitude < 0.0001f)
+            cameraUp = Vector3.up;
+
+        cameraUp.Normalize();
+
+        smoothedCameraUp = cameraUp;
+
+        Vector3 cameraForward = GetCameraForwardOnBankedPlane(cameraUp);
+
+        if (cameraForward.sqrMagnitude < 0.0001f)
+            cameraForward = target.forward;
+
+        cameraForward.Normalize();
+
+        smoothedCameraForward = cameraForward;
+
         float speed01 = GetSpeedPercent();
 
         float currentFollowDistance = followDistance;
@@ -562,42 +749,30 @@ public class RunnerFollowCamera : MonoBehaviour
             currentFollowHeight += extraHeightAtMaxSpeed * speed01;
         }
 
-        Quaternion yawRotation = Quaternion.Euler(0f, currentYaw, 0f);
+        Vector3 desiredPosition =
+            target.position -
+            cameraForward * currentFollowDistance +
+            cameraUp * currentFollowHeight;
 
-        Vector3 desiredOffset =
-            (yawRotation * Vector3.back * currentFollowDistance) +
-            (Vector3.up * currentFollowHeight);
+        transform.position = desiredPosition;
 
-        transform.position = target.position + desiredOffset;
+        Vector3 lookPoint =
+            target.position +
+            cameraUp * lookHeightOffset +
+            cameraForward * lookAheadDistance;
 
-        Vector3 lookPoint = target.position + Vector3.up * lookHeightOffset;
-        Quaternion lookRotation = Quaternion.LookRotation(lookPoint - transform.position, Vector3.up);
+        Vector3 lookDirection = lookPoint - transform.position;
 
-        Vector3 euler = lookRotation.eulerAngles;
-        transform.rotation = Quaternion.Euler(fixedPitch, euler.y, 0f);
-    }
+        if (lookDirection.sqrMagnitude < 0.0001f)
+            lookDirection = cameraForward;
 
-    private float GetSlopePitchOffset()
-    {
-        if (!useSlopePitch || runner == null || !runner.IsGrounded())
-            return 0f;
+        transform.rotation = Quaternion.LookRotation(
+            lookDirection.normalized,
+            cameraUp
+        );
 
-        Vector3 groundNormal = runner.GetGroundNormal().normalized;
-        Vector3 forward = smoothedHeading;
-        forward.y = 0f;
-
-        if (forward.sqrMagnitude < 0.0001f)
-            return 0f;
-
-        forward.Normalize();
-
-        Vector3 projectedUpOnGroundPlane = Vector3.ProjectOnPlane(Vector3.up, groundNormal);
-
-        if (projectedUpOnGroundPlane.sqrMagnitude < 0.0001f)
-            return 0f;
-
-        float slopeAmount = Vector3.Dot(forward, projectedUpOnGroundPlane.normalized);
-        return -slopeAmount * maxSlopePitchOffset;
+        positionVelocity = Vector3.zero;
+        smoothedLookAhead = cameraForward * lookAheadDistance;
     }
 
     private void OnDrawGizmos()
@@ -605,14 +780,26 @@ public class RunnerFollowCamera : MonoBehaviour
         if (!drawDebug || target == null)
             return;
 
+        Vector3 cameraUp = Application.isPlaying ? smoothedCameraUp : Vector3.up;
+        Vector3 cameraForward = Application.isPlaying ? smoothedCameraForward : target.forward;
+
         Gizmos.color = Color.white;
-        Gizmos.DrawLine(target.position, target.position + Vector3.up * lookHeightOffset);
+        Gizmos.DrawLine(
+            target.position,
+            target.position + cameraUp * lookHeightOffset
+        );
 
         Gizmos.color = Color.yellow;
-        Gizmos.DrawLine(target.position, target.position + smoothedHeading * 3f);
+        Gizmos.DrawLine(
+            target.position,
+            target.position + cameraForward * 3f
+        );
 
         Gizmos.color = Color.cyan;
-        Gizmos.DrawSphere(target.position + Vector3.up * lookHeightOffset + smoothedLookAhead, 0.12f);
+        Gizmos.DrawSphere(
+            target.position + cameraUp * lookHeightOffset + smoothedLookAhead,
+            0.12f
+        );
     }
 
     private void OnGUI()
@@ -629,7 +816,7 @@ public class RunnerFollowCamera : MonoBehaviour
 
         GUI.Label(new Rect(20, 165, 500, 30), $"Kick: {currentKickAmount:F1}", style);
         GUI.Label(new Rect(20, 190, 500, 30), $"Kick Hold: {kickHoldTimer:F2}", style);
-        GUI.Label(new Rect(20, 215, 500, 30), $"Bank: {currentBank:F1}", style);
+        GUI.Label(new Rect(20, 215, 500, 30), $"Turn Bank: {currentBank:F1}", style);
         GUI.Label(new Rect(20, 240, 500, 30), $"Shake: {shakeTimer:F2}", style);
     }
 }
