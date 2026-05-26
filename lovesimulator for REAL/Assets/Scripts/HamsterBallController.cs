@@ -80,27 +80,51 @@ public class HamsterBallController : MonoBehaviour
     public float minSpeedToUpdateFacing = 0.25f;
 
     [Header("Jump")]
-    [Tooltip("Desired jump height.")]
-    public float jumpHeight = 1.8f;
-
-    [Tooltip("Time from jump start to apex.")]
-    public float timeToApex = 0.28f;
-
-    [Tooltip("Time from apex back down.")]
-    public float timeToDescend = 0.22f;
+    [Tooltip("World-up speed added when pressing jump. This is not a fixed jump arc.")]
+    public float jumpUpSpeed = 13.5f;
 
     [Tooltip("Minimum time between jumps.")]
     public float jumpCooldown = 0.10f;
 
     [Tooltip("How long ground probing is disabled after jumping so the player actually leaves the road.")]
-    public float jumpDetachTime = 0.14f;
+    public float jumpDetachTime = 0.10f;
 
-    [Tooltip("Small extra position push away from the road normal when jumping. Helps prevent instant re-grounding on slopes.")]
-    public float jumpSurfaceExitOffset = 0.08f;
+    [Tooltip("Pushes the player away from the road surface when jumping. This uses the ground normal, not world up.")]
+    public float jumpSurfaceExitOffset = 0.22f;
+
+    [Tooltip("If true, jumping preserves ramp/bank velocity instead of flattening movement to world X/Z.")]
+    public bool preserveRampVelocityOnJump = true;
+
+    [Tooltip("If true, removes only velocity going into the road surface before jumping.")]
+    public bool removeIntoGroundVelocityOnJump = true;
+
+    [Tooltip("Extra multiplier for how much existing upward ramp velocity is preserved when jumping.")]
+    public float rampUpVelocityPreserveMultiplier = 1.0f;
+
+    [Header("Air Gravity")]
+    [Tooltip("Normal world-down gravity used while airborne. Higher = shorter airtime.")]
+    public float airGravity = 32f;
+
+    [Tooltip("Extra gravity while falling. Keep low if you want ramp launches to be rewarded.")]
+    public float fallGravityMultiplier = 1.10f;
+
+    [Tooltip("Optional extra upward speed from fast movement when jumping. Rewards high-speed jump timing.")]
+    public float speedToJumpLiftBonus = 0.035f;
+
+    [Tooltip("Maximum extra upward speed from speed-based lift.")]
+    public float maxSpeedLiftBonus = 5f;
+
+    [Header("Airborne Anti-Tunnel")]
+    [Tooltip("If true, while airborne the controller spherecasts forward to stop tunneling through road mesh.")]
+    public bool useAirborneAntiTunnel = true;
+
+    [Tooltip("Extra distance added to the airborne anti-tunnel sweep.")]
+    public float airborneAntiTunnelPadding = 0.15f;
+
+    [Tooltip("How much smaller than the player radius the airborne anti-tunnel spherecast should be.")]
+    public float airborneAntiTunnelRadiusShrink = 0.04f;
 
 
-
- 
 
     [Header("Free Dash")]
     [Tooltip("If true, the love meter must be full to dash.")]
@@ -436,7 +460,9 @@ public class HamsterBallController : MonoBehaviour
     private Vector3 smoothedGroundNormal = Vector3.up;
     private float groundProbeDistanceThisFrame;
     private float groundSnapTimer;
-    
+
+    private Vector3 lastJumpSurfaceNormal = Vector3.up;
+
 
     private Vector3 railSwitchHopStartPos;
     private Vector3 railSwitchHopMidPos;
@@ -452,9 +478,7 @@ public class HamsterBallController : MonoBehaviour
 
     private RailGrindSplineDreamteck pendingRailSpline;
     private RailGrindSplineDreamteck.RailSample pendingRailSample;
-    private float JumpLaunchSpeed => (2f * jumpHeight) / Mathf.Max(0.01f, timeToApex);
-    private float RiseGravity => (2f * jumpHeight) / Mathf.Max(0.01f, timeToApex * timeToApex);
-    private float FallGravity => (2f * jumpHeight) / Mathf.Max(0.01f, timeToDescend * timeToDescend);
+    
 
     public bool IsDashing => dashTimer > 0f || isChainDashing || isInChainHitStop || isRailGrinding;
 
@@ -585,6 +609,7 @@ public class HamsterBallController : MonoBehaviour
 
         ApplyJumpGravity(dt);
         HandleJump();
+        PreventAirborneRoadTunneling(dt);
 
         jumpPressed = false;
         dashPressed = false;
@@ -2188,21 +2213,7 @@ public class HamsterBallController : MonoBehaviour
     }
 
 
-    private void ApplyJumpGravity()
-    {
-        if (isGrounded || isInChainHitStop || isRailGrinding)
-            return;
-
-        if (dashStartedInAir && dashTimer > 0f)
-            return;
-
-        float gravityToApply = rb.linearVelocity.y > 0f ? RiseGravity : FallGravity;
-
-        // Keep normal world gravity for now.
-        // The jump itself launches away from road/player up;
-        // gravity brings the player back down in world space after that.
-        rb.AddForce(Vector3.down * gravityToApply, ForceMode.Acceleration);
-    }
+   
 
     private void HandleJump()
     {
@@ -2212,30 +2223,83 @@ public class HamsterBallController : MonoBehaviour
         if (!jumpPressed || !isGrounded || jumpTimer > 0f || isInChainHitStop)
             return;
 
+        // The actual jump boost is still WORLD UP.
         Vector3 jumpDir = Vector3.up;
+
+        // But the surface exit is based on the road/bank normal.
+        Vector3 surfaceNormal = lastGroundNormal.sqrMagnitude > 0.001f
+            ? lastGroundNormal.normalized
+            : Vector3.up;
+
+        lastJumpSurfaceNormal = surfaceNormal;
 
         // Visuals can keep the current slope angle briefly, but jump physics is world-up.
         heldAirborneVisualUp = smoothedVisualUp.sqrMagnitude > 0.001f
             ? smoothedVisualUp.normalized
             : Vector3.up;
 
-        // Preserve current horizontal movement only.
-        Vector3 horizontalVelocity = GetHorizontalVelocity();
+        Vector3 newVelocity;
 
-        // Remove downward velocity before jumping.
-        Vector3 currentVelocity = rb.linearVelocity;
-        if (currentVelocity.y < 0f)
-            currentVelocity.y = 0f;
+        if (preserveRampVelocityOnJump)
+        {
+            // Keep actual current velocity.
+            // This is what allows bank/ramp timing to matter.
+            newVelocity = rb.linearVelocity;
 
-        rb.linearVelocity = new Vector3(
-            horizontalVelocity.x,
-            JumpLaunchSpeed,
-            horizontalVelocity.z
-        );
+            // Remove only velocity going INTO the surface.
+            // Do not flatten the whole velocity.
+            if (removeIntoGroundVelocityOnJump)
+            {
+                float intoSurfaceSpeed = Vector3.Dot(newVelocity, -surfaceNormal);
 
-        // Tiny world-up nudge so the ground probe does not instantly re-catch us.
+                if (intoSurfaceSpeed > 0f)
+                    newVelocity += surfaceNormal * intoSurfaceSpeed;
+            }
+
+            // Reward high speed with a small extra jump lift.
+            // This makes good speed + good ramp timing feel better without hard-forcing the arc.
+            float speedLiftBonus = Mathf.Clamp(
+                GetHorizontalVelocity().magnitude * speedToJumpLiftBonus,
+                0f,
+                maxSpeedLiftBonus
+            );
+
+            float desiredUpSpeed = jumpUpSpeed + speedLiftBonus;
+
+            // Preserve upward ramp velocity instead of deleting it.
+            float currentWorldUpSpeed = Vector3.Dot(newVelocity, jumpDir);
+
+            if (currentWorldUpSpeed > 0f)
+            {
+                Vector3 upVelocity = jumpDir * currentWorldUpSpeed;
+                Vector3 nonUpVelocity = newVelocity - upVelocity;
+
+                newVelocity = nonUpVelocity + upVelocity * rampUpVelocityPreserveMultiplier;
+                currentWorldUpSpeed = Vector3.Dot(newVelocity, jumpDir);
+            }
+
+            // Only add enough world-up speed to reach the desired jump speed.
+            // If the ramp already gave good upward velocity, do not overwrite it.
+            if (currentWorldUpSpeed < desiredUpSpeed)
+                newVelocity += jumpDir * (desiredUpSpeed - currentWorldUpSpeed);
+        }
+        else
+        {
+            // Fallback old-style behavior, but using jumpUpSpeed instead of JumpLaunchSpeed.
+            Vector3 horizontalVelocity = GetHorizontalVelocity();
+
+            newVelocity = new Vector3(
+                horizontalVelocity.x,
+                jumpUpSpeed,
+                horizontalVelocity.z
+            );
+        }
+
+        rb.linearVelocity = newVelocity;
+
+        // Push away from the actual road surface, not world up.
         if (jumpSurfaceExitOffset > 0f)
-            rb.position += jumpDir * jumpSurfaceExitOffset;
+            rb.position += surfaceNormal * jumpSurfaceExitOffset;
 
         isGrounded = false;
         groundedTimer = 0f;
@@ -2245,7 +2309,7 @@ public class HamsterBallController : MonoBehaviour
         hasGroundProbe = false;
     }
 
-  
+
 
     private void UpdateVisuals()
     {
@@ -2809,12 +2873,70 @@ public class HamsterBallController : MonoBehaviour
         if (dashStartedInAir && dashTimer > 0f)
             return;
 
-        float gravityToApply = rb.linearVelocity.y > 0f ? RiseGravity : FallGravity;
+        float gravityToApply = airGravity;
+
+        // Keep this low. Big fall multipliers will kill the reward for good ramp launches.
+        if (rb.linearVelocity.y < 0f)
+            gravityToApply *= Mathf.Max(1f, fallGravityMultiplier);
 
         rb.AddForce(Vector3.down * gravityToApply, ForceMode.Acceleration);
     }
 
+    private void PreventAirborneRoadTunneling(float dt)
+    {
+        if (!useAirborneAntiTunnel)
+            return;
+
+        if (isGrounded || hasGroundProbe || isRailGrinding || isChainDashing || isInChainHitStop)
+            return;
+
+        if (groundProbeLayers.value == 0)
+            return;
+
+        Vector3 velocity = rb.linearVelocity;
+        float speed = velocity.magnitude;
+
+        if (speed <= 0.001f)
+            return;
+
+        float playerRadius = GetScaledPlayerRadius();
+        float castRadius = Mathf.Max(0.01f, playerRadius - Mathf.Abs(airborneAntiTunnelRadiusShrink));
+
+        Vector3 castDirection = velocity / speed;
+        float castDistance = speed * dt + Mathf.Max(0f, airborneAntiTunnelPadding);
+
+        if (!Physics.SphereCast(
+                rb.position,
+                castRadius,
+                castDirection,
+                out RaycastHit hit,
+                castDistance,
+                groundProbeLayers,
+                QueryTriggerInteraction.Ignore))
+        {
+            return;
+        }
+
+        Vector3 hitNormal = hit.normal.sqrMagnitude > 0.001f
+            ? hit.normal.normalized
+            : lastJumpSurfaceNormal;
+
+        if (hitNormal.sqrMagnitude < 0.001f)
+            hitNormal = Vector3.up;
+
+        // Move to a safe non-penetrating position.
+        Vector3 safePosition = hit.point + hitNormal * (playerRadius + groundSkin);
+        rb.position = safePosition;
+
+        // Remove only the velocity going into the surface.
+        Vector3 newVelocity = rb.linearVelocity;
+        float intoSurfaceSpeed = Vector3.Dot(newVelocity, -hitNormal);
+
+        if (intoSurfaceSpeed > 0f)
+            newVelocity += hitNormal * intoSurfaceSpeed;
+
+        rb.linearVelocity = newVelocity;
+    }
 
 
- 
 }
