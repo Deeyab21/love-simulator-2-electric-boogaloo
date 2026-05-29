@@ -362,6 +362,25 @@ public class HamsterBallController : MonoBehaviour
     [Tooltip("If true, draw the ground probe ray/sphere hit in scene view.")]
     public bool drawGroundProbeDebug = true;
 
+    [Header("Road Edge Grounding Filter")]
+    [Tooltip("Optional. If assigned, ground probe hits near/outside the spline road edge can be rejected.")]
+    public SplineSampler groundRoadSampler;
+
+    [Tooltip("If true, the player is not allowed to ground to the unsafe side edge of the spline road mesh.")]
+    public bool rejectRoadEdgeGrounding = true;
+
+    [Tooltip("How many samples are used to find the closest point along the spline road. Higher = more accurate, slightly more expensive.")]
+    public int roadEdgeFilterResolution = 80;
+
+    [Tooltip("How far inward from the road edge the player must be before the hit is accepted as valid ground.")]
+    public float roadEdgeGroundInset = 0.45f;
+
+    [Tooltip("Extra allowance beyond the road edge before ground is rejected. Keep small. Useful if mesh width and sampler width differ slightly.")]
+    public float roadEdgeGroundTolerance = 0.05f;
+
+    [Tooltip("If true, draws debug lines showing accepted/rejected road edge grounding.")]
+    public bool drawRoadEdgeGroundingDebug = true;
+
     [Header("Ground Probe Anti-Tunnel")]
     [Tooltip("Extra ground check distance used when moving fast, falling, or dashing into slopes.")]
     public float groundProbeSpeedDistanceMultiplier = 0.035f;
@@ -462,6 +481,13 @@ public class HamsterBallController : MonoBehaviour
     private float groundSnapTimer;
 
     private Vector3 lastJumpSurfaceNormal = Vector3.up;
+    private bool lastRoadEdgeGroundCheckValid;
+    private bool lastRoadEdgeGroundCheckAccepted;
+    private Vector3 lastRoadEdgeHitPoint;
+    private Vector3 lastRoadEdgeCenter;
+    private Vector3 lastRoadEdgeRight;
+    private float lastRoadEdgeSignedDistance;
+    private float lastRoadEdgeAllowedHalfWidth;
 
 
     private Vector3 railSwitchHopStartPos;
@@ -603,6 +629,7 @@ public class HamsterBallController : MonoBehaviour
         TryAutoCatchRail();
 
         ApplyDrive(dt);
+        PreventDashSlopeTunneling(dt);
         ApplyDirectionalGrip(dt);
         ApplyMagneticBarrierVelocityResponse(dt);
         UpdateFacingFromMovement();
@@ -2103,8 +2130,7 @@ public class HamsterBallController : MonoBehaviour
 
             Vector3 redirected = desiredForward * dashSpeed;
 
-            float yVelocity = dashStartedInAir ? 0f : rb.linearVelocity.y;
-
+            float yVelocity = rb.linearVelocity.y;
             rb.linearVelocity = new Vector3(
                 redirected.x,
                 yVelocity,
@@ -2176,6 +2202,80 @@ public class HamsterBallController : MonoBehaviour
                 );
             }
         }
+    }
+
+
+    private void PreventDashSlopeTunneling(float dt)
+    {
+        if (dashTimer <= 0f)
+            return;
+
+        if (isChainDashing || isInChainHitStop || isRailGrinding)
+            return;
+
+        if (groundProbeLayers.value == 0)
+            return;
+
+        Vector3 velocity = rb.linearVelocity;
+        float speed = velocity.magnitude;
+
+        if (speed <= 0.001f)
+            return;
+
+        Vector3 direction = velocity / speed;
+
+        float playerRadius = GetScaledPlayerRadius();
+        float castRadius = Mathf.Max(0.05f, playerRadius - 0.04f);
+
+        // This is intentionally a little generous because dash speed can cross
+        // an entire thin spline mesh between FixedUpdate frames.
+        float castDistance = speed * dt + 0.45f;
+
+        if (!Physics.SphereCast(
+                rb.position,
+                castRadius,
+                direction,
+                out RaycastHit hit,
+                castDistance,
+                groundProbeLayers,
+                QueryTriggerInteraction.Ignore))
+        {
+            return;
+        }
+
+        Vector3 hitNormal = hit.normal.sqrMagnitude > 0.001f
+            ? hit.normal.normalized
+            : Vector3.up;
+
+        // Do not treat ceilings/backfaces as dash landings.
+        if (Vector3.Dot(direction, hitNormal) >= -0.05f)
+            return;
+
+        float safeDistance = playerRadius + groundSkin + groundImpactSkin;
+
+        rb.position = hit.point + hitNormal * safeDistance;
+
+        Vector3 newVelocity = rb.linearVelocity;
+
+        // Remove the part of dash velocity that is driving into the slope.
+        float intoSurfaceSpeed = Vector3.Dot(newVelocity, -hitNormal);
+        if (intoSurfaceSpeed > 0f)
+            newVelocity += hitNormal * intoSurfaceSpeed;
+
+        // Keep the remaining speed sliding along the slope instead of killing dash.
+        newVelocity = Vector3.ProjectOnPlane(newVelocity, hitNormal);
+
+        rb.linearVelocity = newVelocity;
+
+        hasGroundProbe = true;
+        probedGroundPoint = hit.point;
+        probedGroundNormal = hitNormal;
+        smoothedGroundNormal = hitNormal;
+        lastGroundNormal = hitNormal;
+
+        groundedTimer = groundedMemory;
+        groundSnapTimer = groundSnapMemory;
+        isGrounded = true;
     }
 
     private void ApplyDirectionalGrip(float dt)
@@ -2501,11 +2601,59 @@ public class HamsterBallController : MonoBehaviour
         return steerInput;
     }
 
-    
+    private bool IsRoadGroundHitAllowed(RaycastHit hit)
+    {
+        lastRoadEdgeGroundCheckValid = false;
+        lastRoadEdgeGroundCheckAccepted = true;
 
-    
+        if (!rejectRoadEdgeGrounding)
+            return true;
 
-    
+        if (groundRoadSampler == null)
+            return true;
+
+        if (!groundRoadSampler.TryFindClosestRoadSample(
+                hit.point,
+                roadEdgeFilterResolution,
+                out SplineSampler.ClosestRoadSample roadSample))
+        {
+            // If we cannot find the road sample, don't reject.
+            // Better to avoid randomly losing ground because the reference is missing/bad.
+            return true;
+        }
+
+        Vector3 fromCenter = hit.point - roadSample.center;
+
+        // Signed lateral distance across the road width.
+        float signedDistance = Vector3.Dot(fromCenter, roadSample.right.normalized);
+        float absDistance = Mathf.Abs(signedDistance);
+
+        // SplineSampler.Width is the half-width in your mesh generation:
+        // p1 = center + right * width, p2 = center - right * width.
+        float halfWidth = groundRoadSampler.Width;
+
+        // Player center should not be allowed to ground right at the edge.
+        float allowedHalfWidth = Mathf.Max(
+            0.01f,
+            halfWidth - roadEdgeGroundInset + roadEdgeGroundTolerance
+        );
+
+        lastRoadEdgeGroundCheckValid = true;
+        lastRoadEdgeHitPoint = hit.point;
+        lastRoadEdgeCenter = roadSample.center;
+        lastRoadEdgeRight = roadSample.right.normalized;
+        lastRoadEdgeSignedDistance = signedDistance;
+        lastRoadEdgeAllowedHalfWidth = allowedHalfWidth;
+
+        bool accepted = absDistance <= allowedHalfWidth;
+        lastRoadEdgeGroundCheckAccepted = accepted;
+
+        return accepted;
+    }
+
+
+
+
 
     private void OnGUI()
     {
@@ -2736,6 +2884,88 @@ public class HamsterBallController : MonoBehaviour
         );
     }
 
+    private bool TryVelocityGroundSweep(float dt)
+    {
+        if (isChainDashing || isInChainHitStop || isRailGrinding)
+            return false;
+
+        if (jumpDetachTimer > 0f)
+            return false;
+
+        Vector3 velocity = rb.linearVelocity;
+        float speed = velocity.magnitude;
+
+        // Don't bother for tiny movement.
+        if (speed < 6f)
+            return false;
+
+        Vector3 direction = velocity / speed;
+
+        // If moving mostly upward, don't ground-snap.
+        if (velocity.y > 1f)
+            return false;
+
+        float playerRadius = GetScaledPlayerRadius();
+        float castRadius = Mathf.Max(0.05f, playerRadius - 0.04f);
+
+        // Enough distance to cover this physics frame plus a small safety pad.
+        float castDistance = speed * dt + 0.35f;
+
+        if (!Physics.SphereCast(
+                rb.position,
+                castRadius,
+                direction,
+                out RaycastHit hit,
+                castDistance,
+                groundProbeLayers,
+                QueryTriggerInteraction.Ignore))
+        {
+            return false;
+        }
+
+        Vector3 hitNormal = hit.normal.sqrMagnitude > 0.001f
+            ? hit.normal.normalized
+            : Vector3.up;
+
+        // Accept steeper banks than normal, but reject actual walls/undersides.
+        float angle = Vector3.Angle(hitNormal, Vector3.up);
+        if (angle > 85f)
+            return false;
+
+        // If we are already moving away from the surface, don't snap.
+        if (Vector3.Dot(velocity, hitNormal) > 0.5f)
+            return false;
+
+        float safeDistance =
+            playerRadius +
+            groundSkin +
+            groundImpactSkin;
+
+        rb.position = hit.point + hitNormal * safeDistance;
+
+        Vector3 newVelocity = rb.linearVelocity;
+
+        // Remove only the part of velocity that would continue into the surface.
+        float intoSurfaceSpeed = Vector3.Dot(newVelocity, -hitNormal);
+        if (intoSurfaceSpeed > 0f)
+            newVelocity += hitNormal * intoSurfaceSpeed;
+
+        // Keep the sliding/forward part of the velocity.
+        rb.linearVelocity = Vector3.ProjectOnPlane(newVelocity, hitNormal);
+
+        hasGroundProbe = true;
+        probedGroundPoint = hit.point;
+        probedGroundNormal = hitNormal;
+        smoothedGroundNormal = hitNormal;
+        lastGroundNormal = hitNormal;
+
+        groundedTimer = groundedMemory;
+        groundSnapTimer = groundSnapMemory;
+        isGrounded = true;
+
+        return true;
+    }
+
     private void ProbeGround(float dt)
     {
         hasGroundProbe = false;
@@ -2747,6 +2977,11 @@ public class HamsterBallController : MonoBehaviour
             groundedTimer = 0f;
             return;
         }
+
+        // First, catch angled/high-speed landings by sweeping along actual velocity.
+        // If this succeeds, we already resolved the landing and do not need the normal downward probe.
+        if (TryVelocityGroundSweep(dt))
+            return;
 
         float speed = rb.linearVelocity.magnitude;
         float extraDistance = Mathf.Min(
@@ -2788,6 +3023,13 @@ public class HamsterBallController : MonoBehaviour
 
         if (!foundHit)
         {
+            isGrounded = groundedTimer > 0f;
+            return;
+        }
+
+        if (!IsRoadGroundHitAllowed(bestHit))
+        {
+            hasGroundProbe = false;
             isGrounded = groundedTimer > 0f;
             return;
         }
